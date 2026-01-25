@@ -578,7 +578,7 @@ with st.sidebar:
                 weather_features, source_name, fetch_debug = fetch_weather_data_hybrid()
                 outage_features = fetch_power_outages()
             
-            with st.spinner(f"🔍 Analyzing against {len(weather_features)} weather features..."):
+            with st.spinner(f"🔍 Analyzing against {len(weather_features)} weather alerts + {len(outage_features)} outage zones..."):
                 df_final = run_impact_analysis(
                     df_geo, 
                     weather_features, 
