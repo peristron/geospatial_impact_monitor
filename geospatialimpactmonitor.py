@@ -7,7 +7,7 @@ from shapely.geometry import shape, Point
 import time
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="IP Risk Overlay", layout="wide")
+st.set_page_config(page_title="Geospatial Impact Monitor - IP Risk Overlay", layout="wide")
 
 # --- FUNCTIONS ---
 
