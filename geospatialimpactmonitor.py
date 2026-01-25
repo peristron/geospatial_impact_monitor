@@ -8,18 +8,64 @@ from shapely.validation import make_valid
 import time
 
 # --- CONFIGURATION ---
+
 st.set_page_config(page_title="Geospatial Impact Monitor", layout="wide")
+
+# --- SEVERITY CONFIGURATION ---
+
+SEVERITY_LEVELS = {
+    'Extreme': 4,
+    'Severe': 3,
+    'Moderate': 2,
+    'Minor': 1,
+    'Unknown': 0
+}
+
+# Event types that are typically informational/low-impact
+LOW_PRIORITY_EVENTS = [
+    'Special Weather Statement',
+    'Air Quality Alert',
+    'Beach Hazards Statement',
+    'Rip Current Statement',
+    'Marine Weather Statement',
+    'Hydrologic Outlook',
+    'Short Term Forecast',
+    'Hazardous Weather Outlook'
+]
+
+def get_severity_rank(severity_str):
+    """Convert severity string to numeric rank for comparison."""
+    if not severity_str:
+        return 0
+    return SEVERITY_LEVELS.get(severity_str, 0)
+
+def passes_severity_threshold(alert_props, min_severity_rank, exclude_low_priority=False):
+    """Check if an alert meets the severity threshold criteria."""
+    severity = alert_props.get('severity', 'Unknown')
+    event = alert_props.get('event', '')
+
+    # Check severity rank
+    if get_severity_rank(severity) < min_severity_rank:
+        return False
+
+    # Optionally exclude low-priority event types
+    if exclude_low_priority and event in LOW_PRIORITY_EVENTS:
+        return False
+
+    return True
 
 # --- DATA FETCHING ---
 
 def fetch_weather_data_hybrid():
     """
-    Attempts to fetch weather from multiple sources.
-    Prioritizes sources that include polygon geometry.
+    Fetches weather from BOTH sources and merges results.
+    Errs on the side of caution by including alerts from all available sources.
     Returns: (List of features, source name, debug info dict)
     """
     debug_info = {}
-    
+    all_features = []
+    sources_used = []
+
     # 1. Try Iowa Environmental Mesonet (Real-time, usually has geometry)
     iem_url = "https://mesonet.agron.iastate.edu/geojson/sbw.geojson"
     try:
@@ -33,15 +79,15 @@ def fetch_weather_data_hybrid():
             valid_geom_count = sum(1 for f in features 
                                    if f.get('geometry') and f['geometry'].get('coordinates'))
             debug_info['iem_valid_geom_count'] = valid_geom_count
-            # Only use IEM if we got usable geometry
             if valid_geom_count > 0:
-                return features, "IEM (Real-Time Feed)", debug_info
+                all_features.extend(features)
+                sources_used.append("IEM")
             else:
                 debug_info['iem_note'] = "No valid geometries found"
     except Exception as e:
         debug_info['iem_error'] = str(e)
 
-    # 2. Fallback to NWS API
+    # 2. ALSO try NWS API (union, not fallback)
     nws_url = "https://api.weather.gov/alerts/active?status=actual&message_type=alert"
     headers = {"User-Agent": "(geospatial-impact-monitor, contact@example.com)"}
     try:
@@ -56,13 +102,22 @@ def fetch_weather_data_hybrid():
                                    if f.get('geometry') and f['geometry'].get('coordinates'))
             debug_info['nws_valid_geom_count'] = valid_geom_count
             debug_info['nws_null_geom_count'] = len(features) - valid_geom_count
-            return features, "NWS API (Official)", debug_info
+            # Include ALL NWS features (even those with null geometry for point-fallback)
+            all_features.extend(features)
+            sources_used.append("NWS")
     except Exception as e:
         debug_info['nws_error'] = str(e)
-        return [], "Connection Failed", debug_info
 
-    return [], "No Data", debug_info
-
+    # Determine source name for display
+    if sources_used:
+        source_name = " + ".join(sources_used) + " (Merged)"
+    else:
+        source_name = "No Data"
+    
+    debug_info['sources_used'] = sources_used
+    debug_info['total_merged_features'] = len(all_features)
+    
+    return all_features, source_name, debug_info
 
 def check_point_alerts_nws(lat, lon, min_severity_rank=0, exclude_low_priority=False):
     """
@@ -80,7 +135,7 @@ def check_point_alerts_nws(lat, lon, min_severity_rank=0, exclude_low_priority=F
             alerts = []
             for f in features:
                 props = f.get('properties', {})
-                
+
                 # Apply severity filter
                 if not passes_severity_threshold(props, min_severity_rank, exclude_low_priority):
                     continue
@@ -99,14 +154,16 @@ def check_point_alerts_nws(lat, lon, min_severity_rank=0, exclude_low_priority=F
         pass
     return []
 
-
-@st.cache_data(ttl=600)
 @st.cache_data(ttl=600)
 def fetch_power_outages():
-    """Fetches power outage data from multiple sources with fallback."""
-    features = []
-    
-    # 1. Primary: HIFLD (ArcGIS)
+    """
+    Fetches power outage data from BOTH sources and merges results.
+    Errs on the side of caution by including outages from all available sources.
+    """
+    all_features = []
+    seen_counties = set()  # Track to avoid duplicates
+
+    # 1. Try HIFLD (ArcGIS)
     hifld_url = "https://services1.arcgis.com/0MSEUqKaxRlEPj5g/arcgis/rest/services/Power_Outages_County_Level/FeatureServer/0/query"
     hifld_params = {
         'where': "Percent_Out > 0.5", 
@@ -117,40 +174,61 @@ def fetch_power_outages():
         r = requests.get(hifld_url, params=hifld_params, timeout=8)
         if r.status_code == 200:
             features = r.json().get('features', [])
+            for feat in features:
+                props = feat.get('properties', {})
+                county_key = f"{props.get('NAME', '')}_{props.get('State', '')}"
+                if county_key not in seen_counties:
+                    all_features.append(feat)
+                    seen_counties.add(county_key)
     except:
         pass
-    
-    # 2. Fallback: ODIN (ORNL/OpenDataSoft) if no features or error
-    if not features:
-        odin_url = "https://ornl.opendatasoft.com/api/explore/v2.1/catalog/datasets/odin-real-time-outages-county/exports/geojson"
-        odin_params = {
-            'where': 'percent_out > 0.5',
-            'select': 'county,state,percent_out,customers_out,geo_shape'
-        }
-        try:
-            r = requests.get(odin_url, params=odin_params, timeout=8)
-            if r.status_code == 200:
-                data = r.json()
-                # Normalize properties to match HIFLD
-                for feat in data.get('features', []):
-                    props = feat['properties']
+
+    # 2. ALSO try ODIN (ORNL/OpenDataSoft) - merge, not fallback
+    odin_url = "https://ornl.opendatasoft.com/api/explore/v2.1/catalog/datasets/odin-real-time-outages-county/exports/geojson"
+    odin_params = {
+        'where': 'percent_out > 0.5',
+        'select': 'county,state,percent_out,customers_out,geo_shape'
+    }
+    try:
+        r = requests.get(odin_url, params=odin_params, timeout=8)
+        if r.status_code == 200:
+            data = r.json()
+            for feat in data.get('features', []):
+                props = feat['properties']
+                county_key = f"{props.get('county', '')}_{props.get('state', '')}"
+                
+                # If already seen from HIFLD, compare and keep higher percent_out (err on caution)
+                if county_key in seen_counties:
+                    # Find existing and compare - take max
+                    for existing in all_features:
+                        ex_props = existing.get('properties', {})
+                        ex_key = f"{ex_props.get('NAME', '')}_{ex_props.get('State', '')}"
+                        if ex_key == county_key:
+                            existing_pct = ex_props.get('Percent_Out', 0) or 0
+                            new_pct = props.get('percent_out', 0) or 0
+                            if new_pct > existing_pct:
+                                ex_props['Percent_Out'] = new_pct
+                                ex_props['Total_Out'] = props.get('customers_out', ex_props.get('Total_Out'))
+                            break
+                else:
+                    # Normalize properties to match HIFLD format
                     props['NAME'] = props.get('county')
                     props['State'] = props.get('state')
                     props['Percent_Out'] = props.get('percent_out')
                     props['Total_Out'] = props.get('customers_out')
-                features = data.get('features', [])
-        except:
-            pass
-    
-    return features
+                    all_features.append(feat)
+                    seen_counties.add(county_key)
+    except:
+        pass
 
+    return all_features
 
 def get_geolocation_bulk(ip_list):
     """Batched IP Geolocation"""
     url = "http://ip-api.com/batch"
     coords = []
     ip_list = list(filter(None, set(ip_list)))
-    
+
     chunk_size = 100
     for i in range(0, len(ip_list), chunk_size):
         chunk = ip_list[i:i + chunk_size]
@@ -178,11 +256,10 @@ def get_geolocation_bulk(ip_list):
             pass
     return pd.DataFrame(coords)
 
-
 # --- ANALYSIS ---
 
-def run_impact_analysis(df_ips, weather_features, outage_features, 
-                        enable_point_fallback=True, 
+def run_impact_analysis(df_ips, weather_features, outage_features,
+                        enable_point_fallback=True,
                         min_severity_rank=0,
                         exclude_low_priority=False):
     """
@@ -193,10 +270,10 @@ def run_impact_analysis(df_ips, weather_features, outage_features,
     results = []
     weather_features = weather_features or []
     outage_features = outage_features or []
-    
+
     # Track filter statistics
     filter_stats = {'total_alerts': 0, 'passed_filter': 0, 'filtered_out': 0}
-    
+
     # Geometry processing statistics
     geom_stats = {
         'total_features': len(weather_features), 
@@ -261,9 +338,10 @@ def run_impact_analysis(df_ips, weather_features, outage_features,
         except Exception:
             geom_stats['parse_errors'] += 1
             continue
-    
-    # Store filter stats
+
+    # Store stats in session state
     st.session_state.filter_stats = filter_stats
+    st.session_state.geom_stats = geom_stats
 
     # --- Build Outage Polygon List ---
     outage_polys = []
@@ -288,7 +366,7 @@ def run_impact_analysis(df_ips, weather_features, outage_features,
     use_point_fallback = (enable_point_fallback and 
                           geom_stats['valid_polygons'] < geom_stats['total_features'] * 0.1 and
                           geom_stats['total_features'] > 0)
-    
+
     st.session_state.using_point_fallback = use_point_fallback
 
     # --- Analyze Each IP Location ---
@@ -346,61 +424,17 @@ def run_impact_analysis(df_ips, weather_features, outage_features,
         
     return pd.DataFrame(results)
 
-
-# --- SEVERITY CONFIGURATION ---
-
-SEVERITY_LEVELS = {
-    'Extreme': 4,
-    'Severe': 3,
-    'Moderate': 2,
-    'Minor': 1,
-    'Unknown': 0
-}
-
-# Event types that are typically informational/low-impact
-LOW_PRIORITY_EVENTS = [
-    'Special Weather Statement',
-    'Air Quality Alert',
-    'Beach Hazards Statement',
-    'Rip Current Statement',
-    'Marine Weather Statement',
-    'Hydrologic Outlook',
-    'Short Term Forecast',
-    'Hazardous Weather Outlook'
-]
-
-def get_severity_rank(severity_str):
-    """Convert severity string to numeric rank for comparison."""
-    if not severity_str:
-        return 0
-    return SEVERITY_LEVELS.get(severity_str, 0)
-
-def passes_severity_threshold(alert_props, min_severity_rank, exclude_low_priority=False):
-    """Check if an alert meets the severity threshold criteria."""
-    severity = alert_props.get('severity', 'Unknown')
-    event = alert_props.get('event', '')
-    
-    # Check severity rank
-    if get_severity_rank(severity) < min_severity_rank:
-        return False
-    
-    # Optionally exclude low-priority event types
-    if exclude_low_priority and event in LOW_PRIORITY_EVENTS:
-        return False
-    
-    return True
-
 # --- SESSION STATE ---
 
-if 'analysis_results' not in st.session_state: 
+if 'analysis_results' not in st.session_state:
     st.session_state.analysis_results = None
-if 'weather_data' not in st.session_state: 
+if 'weather_data' not in st.session_state:
     st.session_state.weather_data = None
-if 'weather_source' not in st.session_state: 
+if 'weather_source' not in st.session_state:
     st.session_state.weather_source = "Unknown"
 if 'fetch_debug' not in st.session_state:
     st.session_state.fetch_debug = {}
-if 'outage_data' not in st.session_state: 
+if 'outage_data' not in st.session_state:
     st.session_state.outage_data = None
 if 'geom_stats' not in st.session_state:
     st.session_state.geom_stats = {}
@@ -408,18 +442,42 @@ if 'using_point_fallback' not in st.session_state:
     st.session_state.using_point_fallback = False
 if 'filter_stats' not in st.session_state:
     st.session_state.filter_stats = {}
-
+if 'geo_data' not in st.session_state:
+    st.session_state.geo_data = None
+if 'enable_fallback' not in st.session_state:
+    st.session_state.enable_fallback = True
+if 'min_severity_rank' not in st.session_state:
+    st.session_state.min_severity_rank = 2  # Default to Moderate+
+if 'exclude_low_priority' not in st.session_state:
+    st.session_state.exclude_low_priority = True
 
 # --- UI ---
 
 st.title("🌩️ Geospatial Impact Monitor")
-st.markdown("**How it works:** Enter IP addresses (from clients, users, or devices) to assess risks from active weather alerts and power outages. The app geolocates each IP, then checks against real-time data from NOAA and other sources using zone intersections and targeted queries for accurate impact detection.")
+st.markdown("How it works: Enter IP addresses (from clients, users, or devices) to assess risks from active weather alerts and power outages. The app geolocates each IP, then checks against real-time data from NOAA and other sources using zone intersections and targeted queries for accurate impact detection.")
+
+# --- CALLBACK FUNCTION FOR FILTER CHANGES ---
+
+def rerun_analysis_with_filters():
+    """Re-run analysis with current filter settings using cached data."""
+    if (st.session_state.geo_data is not None and 
+        st.session_state.weather_data is not None):
+        
+        df_final = run_impact_analysis(
+            st.session_state.geo_data,
+            st.session_state.weather_data,
+            st.session_state.outage_data,
+            enable_point_fallback=st.session_state.enable_fallback,
+            min_severity_rank=st.session_state.min_severity_rank,
+            exclude_low_priority=st.session_state.exclude_low_priority
+        )
+        st.session_state.analysis_results = df_final
 
 with st.sidebar:
     st.header("Data Input")
     input_method = st.radio("Method", ["Paste IP List", "Bulk Upload"])
     ip_list = []
-    
+
     if input_method == "Paste IP List":
         # Default IPs: higher-ed and/or k12 educational institutions using D2L Brightspace in the US South/Southeast
         raw_input = st.text_area(
@@ -452,14 +510,8 @@ with st.sidebar:
 
     st.divider()
     st.subheader("⚙️ Alert Filters")
-    
+
     severity_options = ['All Alerts', 'Minor+', 'Moderate+', 'Severe+', 'Extreme Only']
-    severity_choice = st.select_slider(
-        "Minimum Severity",
-        options=severity_options,
-        value='Moderate+',
-        help="Filter out lower-severity alerts. 'Moderate+' is recommended to reduce noise."
-    )
     
     # Map selection to numeric threshold
     severity_map = {
@@ -469,17 +521,49 @@ with st.sidebar:
         'Severe+': 3,
         'Extreme Only': 4
     }
-    min_severity_rank = severity_map[severity_choice]
     
+    # Reverse map to get default value
+    reverse_severity_map = {v: k for k, v in severity_map.items()}
+    default_severity = reverse_severity_map.get(st.session_state.min_severity_rank, 'Moderate+')
+    
+    severity_choice = st.select_slider(
+        "Minimum Severity",
+        options=severity_options,
+        value=default_severity,
+        key="severity_slider",
+        help="Filter out lower-severity alerts. 'Moderate+' is recommended to reduce noise."
+    )
+    
+    # Update session state and trigger re-analysis if changed
+    new_severity_rank = severity_map[severity_choice]
+    if new_severity_rank != st.session_state.min_severity_rank:
+        st.session_state.min_severity_rank = new_severity_rank
+        rerun_analysis_with_filters()
+
     exclude_low_priority = st.checkbox(
         "Exclude Informational Alerts", 
-        value=True,
+        value=st.session_state.exclude_low_priority,
+        key="exclude_checkbox",
         help="Filter out 'Special Weather Statement', 'Air Quality Alert', etc."
     )
     
+    # Update session state and trigger re-analysis if changed
+    if exclude_low_priority != st.session_state.exclude_low_priority:
+        st.session_state.exclude_low_priority = exclude_low_priority
+        rerun_analysis_with_filters()
+
     st.divider()
-    enable_fallback = st.checkbox("Enable Point-API Fallback", value=True, 
-                                   help="Query NWS directly for each IP location when polygon geometry is unavailable")
+    enable_fallback = st.checkbox(
+        "Enable Point-API Fallback", 
+        value=st.session_state.enable_fallback,
+        key="fallback_checkbox",
+        help="Query NWS directly for each IP location when polygon geometry is unavailable"
+    )
+    
+    # Update session state and trigger re-analysis if changed
+    if enable_fallback != st.session_state.enable_fallback:
+        st.session_state.enable_fallback = enable_fallback
+        rerun_analysis_with_filters()
 
     if st.button("🔄 Run Spatial Analysis", type="primary"):
         if ip_list:
@@ -488,8 +572,9 @@ with st.sidebar:
             
             with st.spinner("📍 Geolocating IPs..."):
                 df_geo = get_geolocation_bulk(ip_list)
+                st.session_state.geo_data = df_geo  # Store for re-analysis
             
-            with st.spinner("🌦️ Fetching Weather & Power Data..."):
+            with st.spinner("🌦️ Fetching Weather & Power Data (merging sources)..."):
                 weather_features, source_name, fetch_debug = fetch_weather_data_hybrid()
                 outage_features = fetch_power_outages()
             
@@ -498,9 +583,9 @@ with st.sidebar:
                     df_geo, 
                     weather_features, 
                     outage_features, 
-                    enable_point_fallback=enable_fallback,
-                    min_severity_rank=min_severity_rank,
-                    exclude_low_priority=exclude_low_priority
+                    enable_point_fallback=st.session_state.enable_fallback,
+                    min_severity_rank=st.session_state.min_severity_rank,
+                    exclude_low_priority=st.session_state.exclude_low_priority
                 )
             
             st.session_state.analysis_results = df_final
@@ -513,7 +598,6 @@ with st.sidebar:
         else:
             st.warning("Please input at least one IP address.")
 
-
 # --- DISPLAY RESULTS ---
 
 if st.session_state.analysis_results is not None:
@@ -521,22 +605,26 @@ if st.session_state.analysis_results is not None:
     weather_features = st.session_state.weather_data or []
     outage_features = st.session_state.outage_data or []
     geom_stats = st.session_state.geom_stats
-    
+
     # --- Metrics Row ---
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Total Clients", len(df_final))
-    
+
     at_risk_count = len(df_final[df_final['is_at_risk'] == True])
     col2.metric("Clients at Risk", at_risk_count, 
                 delta=f"{at_risk_count}" if at_risk_count > 0 else None,
                 delta_color="inverse")
-    
+
     col3.metric("Weather Source", st.session_state.weather_source)
-    
+
     valid_polys = geom_stats.get('valid_polygons', 0)
     total_feats = geom_stats.get('total_features', 0)
     col4.metric("Valid Polygons", f"{valid_polys}/{total_feats}")
-    
+
+    # Info banner about merged sources
+    if "Merged" in st.session_state.weather_source:
+        st.info("ℹ️ **Multi-Source Mode**: Data merged from IEM + NWS to maximize alert coverage (erring on caution).")
+
     # Warning banner if using fallback
     if st.session_state.using_point_fallback:
         st.warning("⚠️ **Point-API Fallback Active**: Most weather alerts lack polygon geometry. "
@@ -544,7 +632,7 @@ if st.session_state.analysis_results is not None:
 
     # --- Map ---
     st.subheader("Interactive Threat Map")
-    
+
     if not df_final.empty and pd.notnull(df_final.iloc[0].get('lat')):
         center_lat = df_final['lat'].mean()
         center_lon = df_final['lon'].mean()
@@ -627,25 +715,25 @@ if st.session_state.analysis_results is not None:
 
     # --- Data Table ---
     st.subheader("Analysis Results")
-    
+
     # Create a clean display dataframe with status emoji
     df_display = df_final.copy()
     df_display['Status'] = df_display['is_at_risk'].apply(
         lambda x: '🔴 AT RISK' if x else '🟢 Clear'
     )
-    
+
     # Reorder columns for clarity
     display_cols = ['Status', 'ip', 'city', 'region', 'risk_details']
     if 'check_method' in df_display.columns:
         display_cols.append('check_method')
-    
+
     # Filter out the boolean column since we have Status now
     st.dataframe(
         df_display[display_cols],
         use_container_width=True,
         hide_index=True
     )
-    
+
     # Summary counts
     at_risk_df = df_final[df_final['is_at_risk'] == True]
     if not at_risk_df.empty:
@@ -668,7 +756,7 @@ if st.session_state.analysis_results is not None:
             st.json(st.session_state.get('filter_stats', {}))
         
         if geom_stats.get('null_geometry', 0) > 0:
-            null_pct = (geom_stats['null_geometry'] / geom_stats['total_features']) * 100
+            null_pct = (geom_stats['null_geometry'] / geom_stats['total_features']) * 100 if geom_stats['total_features'] > 0 else 0
             st.warning(f"⚠️ {null_pct:.1f}% of weather features have NULL geometry. "
                        "This is typical for NWS zone-based alerts. Point-API fallback recommended.")
         
