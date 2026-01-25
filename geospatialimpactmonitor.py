@@ -101,21 +101,48 @@ def check_point_alerts_nws(lat, lon, min_severity_rank=0, exclude_low_priority=F
 
 
 @st.cache_data(ttl=600)
+@st.cache_data(ttl=600)
 def fetch_power_outages():
-    """Fetches HIFLD Power Outage Data"""
-    url = "https://services1.arcgis.com/0MSEUqKaxRlEPj5g/arcgis/rest/services/Power_Outages_County_Level/FeatureServer/0/query"
-    params = {
+    """Fetches power outage data from multiple sources with fallback."""
+    features = []
+    
+    # 1. Primary: HIFLD (ArcGIS)
+    hifld_url = "https://services1.arcgis.com/0MSEUqKaxRlEPj5g/arcgis/rest/services/Power_Outages_County_Level/FeatureServer/0/query"
+    hifld_params = {
         'where': "Percent_Out > 0.5", 
         'outFields': "NAME,State,Percent_Out,Total_Out", 
         'f': 'geojson'
     }
     try:
-        r = requests.get(url, params=params, timeout=8)
+        r = requests.get(hifld_url, params=hifld_params, timeout=8)
         if r.status_code == 200:
-            return r.json().get('features', [])
+            features = r.json().get('features', [])
     except:
         pass
-    return []
+    
+    # 2. Fallback: ODIN (ORNL/OpenDataSoft) if no features or error
+    if not features:
+        odin_url = "https://ornl.opendatasoft.com/api/explore/v2.1/catalog/datasets/odin-real-time-outages-county/exports/geojson"
+        odin_params = {
+            'where': 'percent_out > 0.5',
+            'select': 'county,state,percent_out,customers_out,geo_shape'
+        }
+        try:
+            r = requests.get(odin_url, params=odin_params, timeout=8)
+            if r.status_code == 200:
+                data = r.json()
+                # Normalize properties to match HIFLD
+                for feat in data.get('features', []):
+                    props = feat['properties']
+                    props['NAME'] = props.get('county')
+                    props['State'] = props.get('state')
+                    props['Percent_Out'] = props.get('percent_out')
+                    props['Total_Out'] = props.get('customers_out')
+                features = data.get('features', [])
+        except:
+            pass
+    
+    return features
 
 
 def get_geolocation_bulk(ip_list):
