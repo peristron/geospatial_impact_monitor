@@ -454,12 +454,28 @@ with st.sidebar:
     st.subheader("⚙️ Alert Filters")
     
     severity_options = ['All Alerts', 'Minor+', 'Moderate+', 'Severe+', 'Extreme Only']
-    severity_choice = st.select_slider(
-        "Minimum Severity",
-        options=severity_options,
-        value='Moderate+',
-        help="Filter out lower-severity alerts. 'Moderate+' is recommended to reduce noise."
-    )
+def rerun_analysis():
+    if 'weather_data' in st.session_state and st.session_state.weather_data is not None:
+        # Re-run analysis with existing data (no re-fetch)
+        with st.spinner("Re-applying filters..."):
+            df_final = run_impact_analysis(
+                st.session_state.analysis_results.drop(['is_at_risk', 'risk_details', 'check_method'], axis=1, errors='ignore'),  # Reuse geo data
+                st.session_state.weather_data,
+                st.session_state.outage_data,
+                enable_point_fallback=enable_fallback,
+                min_severity_rank=min_severity_rank,
+                exclude_low_priority=exclude_low_priority
+            )
+            st.session_state.analysis_results = df_final
+        st.experimental_rerun()  # Refresh display
+
+severity_choice = st.select_slider(
+    "Minimum Severity",
+    options=severity_options,
+    value='Moderate+',
+    on_change=rerun_analysis,
+    help="Filter out lower-severity alerts. 'Moderate+' is recommended to reduce noise."
+)
     
     # Map selection to numeric threshold
     severity_map = {
