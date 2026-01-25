@@ -9,28 +9,58 @@ import time
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Geospatial Impact Monitor", layout="wide")
 
-# --- FUNCTIONS ---
+# --- DATA FETCHING FUNCTIONS ---
 
 @st.cache_data(ttl=300)
 def fetch_active_weather_alerts():
     """
-    Fetches ALL active weather alerts from NOAA.
-    UPDATED: Removed severity filter to ensure Winter Weather Advisories (often 'Minor') are captured.
+    Fetches ALL active weather alerts from NOAA, handling pagination.
     """
-    # We remove the '&severity=...' parameter to get EVERYTHING.
-    url = "https://api.weather.gov/alerts/active?status=actual&message_type=alert"
+    base_url = "https://api.weather.gov/alerts/active?status=actual&message_type=alert"
     headers = {"User-Agent": "(my-weather-app, contact@example.com)"}
     
+    all_features = []
+    next_url = base_url
+
+    # Loop through pages (NOAA limits to ~500 items per page)
+    while next_url:
+        try:
+            response = requests.get(next_url, headers=headers)
+            if response.status_code == 200:
+                data = response.json()
+                all_features.extend(data.get('features', []))
+                
+                # Check if there is a next page
+                pagination = data.get('pagination', {})
+                next_url = pagination.get('next') 
+            else:
+                break
+        except Exception:
+            break
+            
+    return all_features
+
+@st.cache_data(ttl=600)
+def fetch_power_outages():
+    """
+    Fetches US County Level Power Outage data from HIFLD (Homeland Infrastructure Foundation-Level Data).
+    Returns GeoJSON of counties with > 0% outages.
+    """
+    # Public ArcGIS REST Endpoint for US Power Outages
+    url = "https://services1.arcgis.com/0MSEUqKaxRlEPj5g/arcgis/rest/services/Power_Outages_County_Level/FeatureServer/0/query"
+    
+    params = {
+        'where': "Percent_Out > 0.5", # Filter: Only show counties with > 0.5% outage to reduce noise
+        'outFields': "NAME,State,Percent_Out,Total_Out",
+        'f': 'geojson'
+    }
+    
     try:
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, params=params)
         if response.status_code == 200:
-            data = response.json()
-            return data.get('features', [])
-        else:
-            st.error(f"Error fetching weather data: {response.status_code}")
-            return []
+            return response.json().get('features', [])
+        return []
     except Exception as e:
-        st.error(f"Connection error: {e}")
         return []
 
 def get_geolocation_bulk(ip_list):
@@ -65,85 +95,99 @@ def get_geolocation_bulk(ip_list):
                         'region': "N/A"
                     })
             time.sleep(1) 
-        except Exception as e:
-            st.error(f"Error locating IPs: {e}")
+        except Exception:
+            pass
             
     return pd.DataFrame(coords)
 
-def check_intersection(df_ips, weather_features):
+# --- ANALYSIS LOGIC ---
+
+def run_impact_analysis(df_ips, weather_features, outage_features):
     results = []
     
-    # Pre-process polygons
-    alert_polygons = []
+    # 1. Process Weather Polygons
+    weather_polys = []
     for feature in weather_features:
         geom = feature.get('geometry')
         props = feature.get('properties')
         if geom:
             try:
-                poly = shape(geom)
-                # We store the event name to use it for coloring/risk assessment later
-                alert_polygons.append({
-                    'poly': poly,
-                    'event': props.get('event'),
-                    'severity': props.get('severity'),
-                    'headline': props.get('headline')
+                weather_polys.append({
+                    'poly': shape(geom),
+                    'type': 'Weather',
+                    'desc': f"{props.get('severity')} - {props.get('event')}"
                 })
-            except:
-                continue
+            except: continue
 
+    # 2. Process Outage Polygons
+    outage_polys = []
+    for feature in outage_features:
+        geom = feature.get('geometry')
+        props = feature.get('properties')
+        if geom:
+            try:
+                outage_polys.append({
+                    'poly': shape(geom),
+                    'type': 'Power Outage',
+                    'desc': f"Outage: {props.get('Percent_Out')}% ({props.get('Total_Out')} customers)"
+                })
+            except: continue
+
+    # 3. Check Intersections
     for index, row in df_ips.iterrows():
+        hazards = []
         is_at_risk = False
-        risk_details = "None"
         
         if pd.notnull(row['lat']):
             point = Point(row['lon'], row['lat'])
             
-            for alert in alert_polygons:
+            # Check Weather
+            for alert in weather_polys:
                 if alert['poly'].contains(point):
                     is_at_risk = True
-                    risk_details = f"[{alert['severity']}] {alert['event']}"
-                    # We continue checking to find the most severe alert if there are overlapping ones
-                    # but for this demo, breaking on the first hit is fine.
-                    break 
+                    hazards.append(alert['desc'])
+                    break # Record first weather hit
+            
+            # Check Power
+            for outage in outage_polys:
+                if outage['poly'].contains(point):
+                    is_at_risk = True
+                    hazards.append(outage['desc'])
+                    break # Record first outage hit
         
         results.append({
             **row,
             'is_at_risk': is_at_risk,
-            'risk_details': risk_details
+            'risk_details': " | ".join(hazards) if hazards else "None"
         })
         
     return pd.DataFrame(results)
 
-# --- INITIALIZE SESSION STATE ---
+# --- SESSION STATE ---
 if 'analysis_results' not in st.session_state:
     st.session_state.analysis_results = None
 if 'weather_data' not in st.session_state:
     st.session_state.weather_data = None
+if 'outage_data' not in st.session_state:
+    st.session_state.outage_data = None
 
 # --- UI LAYOUT ---
 
 st.title("🌩️ Geospatial Impact Monitor")
-
 st.markdown("""
-This tool leverages **public US National Weather Service data** to perform a **point-in-polygon analysis**, 
-determining if client IP addresses are located within active severe weather zones.  
-*Optimized for US-based IP addresses using open-source intelligence (OSINT) sources.*
+**Data Sources:** 
+1. **Weather:** US National Weather Service (NOAA) - Real-time active alerts.
+2. **Infrastructure:** HIFLD (Homeland Infrastructure Foundation) - Real-time county power outages.
 """)
 
-# Sidebar Input
 with st.sidebar:
     st.header("Data Input")
-    input_method = st.radio("Choose Input Method", ["Paste IP List (Text)", "Bulk Upload (CSV/Excel)"])
+    input_method = st.radio("Choose Input Method", ["Paste IP List", "Bulk Upload (CSV/Excel)"])
     
     ip_list = []
     
-    if input_method == "Paste IP List (Text)":
-        raw_input = st.text_area(
-            "Paste IPs here", 
-            "8.8.8.8\n1.1.1.1", 
-            height=150,
-            help="Enter IPs separated by commas, spaces, or new lines."
-        )
+    if input_method == "Paste IP List":
+        raw_input = st.text_area("Paste IPs here", "130.184.1.1\n129.59.1.1", height=150)
         if raw_input:
             ip_list = [ip.strip() for ip in raw_input.replace(',', ' ').split() if ip.strip()]
             
@@ -155,28 +199,29 @@ with st.sidebar:
                     df = pd.read_csv(uploaded_file)
                 else:
                     df = pd.read_excel(uploaded_file)
-                
                 col_name = 'ip' if 'ip' in df.columns.str.lower() else df.columns[0]
                 ip_list = df[col_name].astype(str).tolist()
                 st.success(f"Loaded {len(ip_list)} IPs")
-            except Exception as e:
-                st.error("Error reading file. Ensure there is a column of IPs.")
+            except Exception:
+                st.error("Error reading file.")
 
     if st.button("Run Spatial Analysis"):
         if ip_list:
-            with st.spinner("Fetching Geolocation Data..."):
+            with st.spinner("Geolocating Clients..."):
                 df_geo = get_geolocation_bulk(ip_list)
                 
-            with st.spinner("Fetching ALL Active Weather Polygons..."):
+            with st.spinner("Fetching NOAA Weather Data (Iterating Pages)..."):
                 weather_features = fetch_active_weather_alerts()
                 
-            with st.spinner("Calculating Spatial Intersections..."):
-                df_final = check_intersection(df_geo, weather_features)
+            with st.spinner("Fetching HIFLD Power Grid Data..."):
+                outage_features = fetch_power_outages()
+                
+            with st.spinner("Analyzing Intersections..."):
+                df_final = run_impact_analysis(df_geo, weather_features, outage_features)
             
             st.session_state.analysis_results = df_final
             st.session_state.weather_data = weather_features
-        else:
-            st.warning("Please provide IP addresses first.")
+            st.session_state.outage_data = outage_features
 
 # --- RESULTS DISPLAY ---
 
@@ -184,17 +229,12 @@ if st.session_state.analysis_results is not None:
     
     df_final = st.session_state.analysis_results
     weather_features = st.session_state.weather_data
+    outage_features = st.session_state.outage_data
 
-    # Summary Metrics
-    col1, col2 = st.columns(2)
-    total_ips = len(df_final)
-    at_risk_ips = len(df_final[df_final['is_at_risk'] == True])
-    
-    col1.metric("Total Clients Mapped", total_ips)
-    col2.metric("Clients in Hazard Zones", at_risk_ips, delta_color="inverse")
-
-    if weather_features:
-        st.caption(f"Visualizing against {len(weather_features)} active weather polygons (All Severities).")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total Clients", len(df_final))
+    col2.metric("Clients at Risk", len(df_final[df_final['is_at_risk'] == True]), delta_color="inverse")
+    col3.metric("Data Points Analyzed", len(weather_features) + len(outage_features))
 
     # Map Visualization
     st.subheader("Interactive Threat Map")
@@ -207,50 +247,35 @@ if st.session_state.analysis_results is not None:
 
     m = folium.Map(location=[center_lat, center_lon], zoom_start=4)
 
-    # Add Weather Polygons
+    # 1. Add Power Outages (Dark Grey)
+    if outage_features:
+        for feature in outage_features:
+            style_function = lambda x: {'fillColor': '#2b2b2b', 'color': '#000000', 'fillOpacity': 0.5, 'weight': 1}
+            folium.GeoJson(feature, style_function=style_function, tooltip="Power Outage Detected").add_to(m)
+
+    # 2. Add Weather (Colored)
     if weather_features:
         for feature in weather_features:
             props = feature.get('properties', {})
             severity = props.get('severity', 'Unknown')
-            event_type = props.get('event', '').lower()
+            event = props.get('event', '').lower()
             
-            # DEFAULT COLOR (Minor/Unknown) = GREY/BLUE
             fill_color = '#5e5e5e' 
-            opacity = 0.2
+            if severity == 'Extreme': fill_color = '#ff0000' # Red
+            elif severity == 'Severe': fill_color = '#ff6600' # Orange
+            elif 'winter' in event or 'ice' in event: fill_color = '#0000ff' # Blue
+            elif 'flood' in event: fill_color = '#008000' # Green
 
-            # Custom Coloring Logic
-            if severity == 'Extreme':
-                fill_color = '#ff0000' # Red (Tornado/Hurricane)
-                opacity = 0.6
-            elif severity == 'Severe':
-                fill_color = '#ff6600' # Orange (Severe Thunderstorm)
-                opacity = 0.5
-            elif 'winter' in event_type or 'ice' in event_type or 'snow' in event_type or 'freeze' in event_type:
-                fill_color = '#0000ff' # Blue (Winter Weather - regardless of severity)
-                opacity = 0.4
-            elif 'flood' in event_type:
-                fill_color = '#008000' # Greenish (Flood)
-                opacity = 0.4
-
-            style_function = lambda x, color=fill_color, op=opacity: {
-                'fillColor': color, 
-                'color': color, 
-                'fillOpacity': op, 
-                'weight': 1
-            }
+            style_function = lambda x, c=fill_color: {'fillColor': c, 'color': c, 'fillOpacity': 0.3, 'weight': 1}
             folium.GeoJson(feature, style_function=style_function).add_to(m)
 
-    # Add IP Markers
+    # 3. Add IP Markers
     for _, row in df_final.iterrows():
         if pd.notnull(row['lat']):
             color = 'red' if row['is_at_risk'] else 'green'
             icon = 'exclamation-triangle' if row['is_at_risk'] else 'user'
             
-            popup_html = f"""
-            <b>IP:</b> {row['ip']}<br>
-            <b>Loc:</b> {row['city']}, {row['region']}<br>
-            <b>Status:</b> {row['risk_details']}
-            """
+            popup_html = f"""<b>IP:</b> {row['ip']}<br><b>Status:</b> {row['risk_details']}"""
             
             folium.Marker(
                 location=[row['lat'], row['lon']],
@@ -259,7 +284,4 @@ if st.session_state.analysis_results is not None:
             ).add_to(m)
 
     st_folium(m, width=1200, height=500)
-
-    # Data Table
-    st.subheader("Detailed Exposure Report")
     st.dataframe(df_final)
