@@ -454,7 +454,7 @@ if 'exclude_low_priority' not in st.session_state:
 # --- UI ---
 
 st.title("🌩️ Geospatial Impact Monitor")
-st.markdown("How it works: Enter IP addresses (from clients, users, or devices) to assess risks from active weather alerts and power outages. The app geolocates each IP, then checks against real-time data from NOAA and other sources using zone intersections and targeted queries for accurate impact detection.")
+st.markdown("How it works: Enter IP addresses (from clients, users, or devices) to assess risks from active weather alerts and power outages. The app geolocates each IP, then checks against ~real-time data from NOAA and other sources using zone intersections and targeted queries for accurate impact detection. The engine 'errs on the side of caution', so if 1 datasource shows a severe alert, and another related datasource shows moderate, the app shows 'severe'.")
 
 # --- CALLBACK FUNCTION FOR FILTER CHANGES ---
 
