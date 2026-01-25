@@ -14,11 +14,11 @@ st.set_page_config(page_title="Geospatial Impact Monitor", layout="wide")
 @st.cache_data(ttl=300)
 def fetch_active_weather_alerts():
     """
-    Fetches active weather alerts from NOAA.
-    UPDATED: Now includes 'Moderate' severity to catch Winter Storms/Advisories.
+    Fetches ALL active weather alerts from NOAA.
+    UPDATED: Removed severity filter to ensure Winter Weather Advisories (often 'Minor') are captured.
     """
-    # Added "Moderate" to the severity list
-    url = "https://api.weather.gov/alerts/active?status=actual&message_type=alert&severity=Severe,Extreme,Moderate"
+    # We remove the '&severity=...' parameter to get EVERYTHING.
+    url = "https://api.weather.gov/alerts/active?status=actual&message_type=alert"
     headers = {"User-Agent": "(my-weather-app, contact@example.com)"}
     
     try:
@@ -40,7 +40,6 @@ def get_geolocation_bulk(ip_list):
     url = "http://ip-api.com/batch"
     coords = []
     
-    # Clean list: remove duplicates and empty strings
     ip_list = list(filter(None, set(ip_list)))
     
     chunk_size = 100
@@ -82,6 +81,7 @@ def check_intersection(df_ips, weather_features):
         if geom:
             try:
                 poly = shape(geom)
+                # We store the event name to use it for coloring/risk assessment later
                 alert_polygons.append({
                     'poly': poly,
                     'event': props.get('event'),
@@ -101,8 +101,9 @@ def check_intersection(df_ips, weather_features):
             for alert in alert_polygons:
                 if alert['poly'].contains(point):
                     is_at_risk = True
-                    # Formatting the alert details for the report
                     risk_details = f"[{alert['severity']}] {alert['event']}"
+                    # We continue checking to find the most severe alert if there are overlapping ones
+                    # but for this demo, breaking on the first hit is fine.
                     break 
         
         results.append({
@@ -132,13 +133,10 @@ determining if client IP addresses are located within active severe weather zone
 # Sidebar Input
 with st.sidebar:
     st.header("Data Input")
-    
-    # NEW: Updated Input Method names
     input_method = st.radio("Choose Input Method", ["Paste IP List (Text)", "Bulk Upload (CSV/Excel)"])
     
     ip_list = []
     
-    # NEW: Logic for Text Area Input
     if input_method == "Paste IP List (Text)":
         raw_input = st.text_area(
             "Paste IPs here", 
@@ -147,7 +145,6 @@ with st.sidebar:
             help="Enter IPs separated by commas, spaces, or new lines."
         )
         if raw_input:
-            # Replaces commas with spaces, then splits by whitespace (handles newlines/spaces)
             ip_list = [ip.strip() for ip in raw_input.replace(',', ' ').split() if ip.strip()]
             
     else:
@@ -170,7 +167,7 @@ with st.sidebar:
             with st.spinner("Fetching Geolocation Data..."):
                 df_geo = get_geolocation_bulk(ip_list)
                 
-            with st.spinner("Fetching Live Weather Polygons (Including Moderate Alerts)..."):
+            with st.spinner("Fetching ALL Active Weather Polygons..."):
                 weather_features = fetch_active_weather_alerts()
                 
             with st.spinner("Calculating Spatial Intersections..."):
@@ -197,7 +194,7 @@ if st.session_state.analysis_results is not None:
     col2.metric("Clients in Hazard Zones", at_risk_ips, delta_color="inverse")
 
     if weather_features:
-        st.caption(f"Visualizing against {len(weather_features)} active weather cells (Severe + Moderate).")
+        st.caption(f"Visualizing against {len(weather_features)} active weather polygons (All Severities).")
 
     # Map Visualization
     st.subheader("Interactive Threat Map")
@@ -215,19 +212,30 @@ if st.session_state.analysis_results is not None:
         for feature in weather_features:
             props = feature.get('properties', {})
             severity = props.get('severity', 'Unknown')
+            event_type = props.get('event', '').lower()
             
-            # Color coding based on severity
-            if severity == 'Extreme':
-                fill_color = '#ff0000' # Red
-            elif severity == 'Severe':
-                fill_color = '#ff6600' # Orange
-            else: 
-                fill_color = '#0000ff' # Blue (for Moderate/Winter stuff)
+            # DEFAULT COLOR (Minor/Unknown) = GREY/BLUE
+            fill_color = '#5e5e5e' 
+            opacity = 0.2
 
-            style_function = lambda x, color=fill_color: {
+            # Custom Coloring Logic
+            if severity == 'Extreme':
+                fill_color = '#ff0000' # Red (Tornado/Hurricane)
+                opacity = 0.6
+            elif severity == 'Severe':
+                fill_color = '#ff6600' # Orange (Severe Thunderstorm)
+                opacity = 0.5
+            elif 'winter' in event_type or 'ice' in event_type or 'snow' in event_type or 'freeze' in event_type:
+                fill_color = '#0000ff' # Blue (Winter Weather - regardless of severity)
+                opacity = 0.4
+            elif 'flood' in event_type:
+                fill_color = '#008000' # Greenish (Flood)
+                opacity = 0.4
+
+            style_function = lambda x, color=fill_color, op=opacity: {
                 'fillColor': color, 
                 'color': color, 
-                'fillOpacity': 0.3, 
+                'fillOpacity': op, 
                 'weight': 1
             }
             folium.GeoJson(feature, style_function=style_function).add_to(m)
