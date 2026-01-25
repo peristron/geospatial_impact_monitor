@@ -14,9 +14,11 @@ st.set_page_config(page_title="Geospatial Impact Monitor", layout="wide")
 @st.cache_data(ttl=300)
 def fetch_active_weather_alerts():
     """
-    Fetches active severe weather alerts from the US National Weather Service (NOAA).
+    Fetches active weather alerts from NOAA.
+    UPDATED: Now includes 'Moderate' severity to catch Winter Storms/Advisories.
     """
-    url = "https://api.weather.gov/alerts/active?status=actual&message_type=alert&severity=Severe,Extreme"
+    # Added "Moderate" to the severity list
+    url = "https://api.weather.gov/alerts/active?status=actual&message_type=alert&severity=Severe,Extreme,Moderate"
     headers = {"User-Agent": "(my-weather-app, contact@example.com)"}
     
     try:
@@ -37,6 +39,9 @@ def get_geolocation_bulk(ip_list):
     """
     url = "http://ip-api.com/batch"
     coords = []
+    
+    # Clean list: remove duplicates and empty strings
+    ip_list = list(filter(None, set(ip_list)))
     
     chunk_size = 100
     for i in range(0, len(ip_list), chunk_size):
@@ -80,7 +85,8 @@ def check_intersection(df_ips, weather_features):
                 alert_polygons.append({
                     'poly': poly,
                     'event': props.get('event'),
-                    'severity': props.get('severity')
+                    'severity': props.get('severity'),
+                    'headline': props.get('headline')
                 })
             except:
                 continue
@@ -95,7 +101,8 @@ def check_intersection(df_ips, weather_features):
             for alert in alert_polygons:
                 if alert['poly'].contains(point):
                     is_at_risk = True
-                    risk_details = f"{alert['severity']} - {alert['event']}"
+                    # Formatting the alert details for the report
+                    risk_details = f"[{alert['severity']}] {alert['event']}"
                     break 
         
         results.append({
@@ -107,7 +114,6 @@ def check_intersection(df_ips, weather_features):
     return pd.DataFrame(results)
 
 # --- INITIALIZE SESSION STATE ---
-# This prevents the app from wiping data when you interact with the map
 if 'analysis_results' not in st.session_state:
     st.session_state.analysis_results = None
 if 'weather_data' not in st.session_state:
@@ -117,7 +123,6 @@ if 'weather_data' not in st.session_state:
 
 st.title("🌩️ Geospatial Impact Monitor")
 
-# Updated Subheading
 st.markdown("""
 This tool leverages **public US National Weather Service data** to perform a **point-in-polygon analysis**, 
 determining if client IP addresses are located within active severe weather zones.  
@@ -127,14 +132,23 @@ determining if client IP addresses are located within active severe weather zone
 # Sidebar Input
 with st.sidebar:
     st.header("Data Input")
-    input_method = st.radio("Choose Input Method", ["Single IP", "Bulk Upload (CSV/Excel)"])
+    
+    # NEW: Updated Input Method names
+    input_method = st.radio("Choose Input Method", ["Paste IP List (Text)", "Bulk Upload (CSV/Excel)"])
     
     ip_list = []
     
-    if input_method == "Single IP":
-        single_ip = st.text_input("Enter IP Address", "8.8.8.8")
-        if single_ip:
-            ip_list = [single_ip.strip()]
+    # NEW: Logic for Text Area Input
+    if input_method == "Paste IP List (Text)":
+        raw_input = st.text_area(
+            "Paste IPs here", 
+            "8.8.8.8\n1.1.1.1", 
+            height=150,
+            help="Enter IPs separated by commas, spaces, or new lines."
+        )
+        if raw_input:
+            # Replaces commas with spaces, then splits by whitespace (handles newlines/spaces)
+            ip_list = [ip.strip() for ip in raw_input.replace(',', ' ').split() if ip.strip()]
             
     else:
         uploaded_file = st.file_uploader("Upload file", type=['csv', 'xlsx'])
@@ -151,19 +165,17 @@ with st.sidebar:
             except Exception as e:
                 st.error("Error reading file. Ensure there is a column of IPs.")
 
-    # Triggers the processing
     if st.button("Run Spatial Analysis"):
         if ip_list:
             with st.spinner("Fetching Geolocation Data..."):
                 df_geo = get_geolocation_bulk(ip_list)
                 
-            with st.spinner("Fetching Live Weather Polygons..."):
+            with st.spinner("Fetching Live Weather Polygons (Including Moderate Alerts)..."):
                 weather_features = fetch_active_weather_alerts()
                 
             with st.spinner("Calculating Spatial Intersections..."):
                 df_final = check_intersection(df_geo, weather_features)
             
-            # SAVE TO SESSION STATE
             st.session_state.analysis_results = df_final
             st.session_state.weather_data = weather_features
         else:
@@ -171,7 +183,6 @@ with st.sidebar:
 
 # --- RESULTS DISPLAY ---
 
-# We check if data exists in session_state, rather than if the button was just clicked
 if st.session_state.analysis_results is not None:
     
     df_final = st.session_state.analysis_results
@@ -186,7 +197,7 @@ if st.session_state.analysis_results is not None:
     col2.metric("Clients in Hazard Zones", at_risk_ips, delta_color="inverse")
 
     if weather_features:
-        st.caption(f"Visualizing against {len(weather_features)} active severe weather cells.")
+        st.caption(f"Visualizing against {len(weather_features)} active weather cells (Severe + Moderate).")
 
     # Map Visualization
     st.subheader("Interactive Threat Map")
@@ -202,7 +213,23 @@ if st.session_state.analysis_results is not None:
     # Add Weather Polygons
     if weather_features:
         for feature in weather_features:
-            style_function = lambda x: {'fillColor': '#ff0000', 'color': '#ff0000', 'fillOpacity': 0.3, 'weight': 1}
+            props = feature.get('properties', {})
+            severity = props.get('severity', 'Unknown')
+            
+            # Color coding based on severity
+            if severity == 'Extreme':
+                fill_color = '#ff0000' # Red
+            elif severity == 'Severe':
+                fill_color = '#ff6600' # Orange
+            else: 
+                fill_color = '#0000ff' # Blue (for Moderate/Winter stuff)
+
+            style_function = lambda x, color=fill_color: {
+                'fillColor': color, 
+                'color': color, 
+                'fillOpacity': 0.3, 
+                'weight': 1
+            }
             folium.GeoJson(feature, style_function=style_function).add_to(m)
 
     # Add IP Markers
@@ -223,7 +250,6 @@ if st.session_state.analysis_results is not None:
                 icon=folium.Icon(color=color, icon=icon, prefix='fa')
             ).add_to(m)
 
-    # st_folium creates the interactive element
     st_folium(m, width=1200, height=500)
 
     # Data Table
