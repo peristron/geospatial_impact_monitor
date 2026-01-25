@@ -596,7 +596,7 @@ if st.session_state.analysis_results is not None:
                 icon=folium.Icon(color=color, icon=icon, prefix='fa')
             ).add_to(m)
 
-    st_folium(m, width=1200, height=500, returned_objects=[])
+    st_folium(m, width="100%", height=700, returned_objects=[])
 
     # --- Data Table ---
     st.subheader("Analysis Results")
