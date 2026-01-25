@@ -386,7 +386,7 @@ if 'filter_stats' not in st.session_state:
 # --- UI ---
 
 st.title("🌩️ Geospatial Impact Monitor")
-st.markdown("**Strategies:** Multi-Source API (IEM + NWS) | Point-Query Fallback | Geometry Validation")
+st.markdown("**How it works:** Enter IP addresses (from clients, users, or devices) to assess risks from active weather alerts and power outages. The app geolocates each IP, then checks against real-time data from NOAA and other sources using zone intersections and targeted queries for accurate impact detection.")
 
 with st.sidebar:
     st.header("Data Input")
