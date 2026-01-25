@@ -118,7 +118,7 @@ def check_intersection(df_ips, weather_features):
 
 # --- UI LAYOUT ---
 
-st.title("🌩️ Geospatial Threat Overlay")
+st.title("🌩️ Geospatial Impact Monitor")
 st.markdown("""
 This tool performs a **point-in-polygon analysis** to determine if client IP addresses 
 are located within active US National Weather Service severe weather zones.
