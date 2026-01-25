@@ -6,6 +6,7 @@ from streamlit_folium import st_folium
 from shapely.geometry import shape, Point
 from shapely.validation import make_valid
 import time
+from datetime import datetime
 
 # --- CONFIGURATION ---
 
@@ -97,6 +98,21 @@ def fetch_weather_data_hybrid():
             data = r.json()
             features = data.get('features', [])
             debug_info['nws_feature_count'] = len(features)
+            
+            # Capture NWS source-reported update time
+            nws_updated = data.get('updated')
+            if nws_updated:
+                debug_info['nws_updated_raw'] = nws_updated
+                # Parse ISO format: "2024-01-15T14:30:00+00:00"
+                try:
+                    # Handle various ISO formats
+                    if nws_updated.endswith('Z'):
+                        nws_updated = nws_updated[:-1] + '+00:00'
+                    updated_dt = datetime.fromisoformat(nws_updated.replace('Z', '+00:00'))
+                    debug_info['nws_updated_parsed'] = updated_dt.strftime('%Y-%m-%d %H:%M:%S UTC')
+                except:
+                    debug_info['nws_updated_parsed'] = nws_updated
+            
             # Count features with actual geometry
             valid_geom_count = sum(1 for f in features 
                                    if f.get('geometry') and f['geometry'].get('coordinates'))
@@ -424,6 +440,35 @@ def run_impact_analysis(df_ips, weather_features, outage_features,
         
     return pd.DataFrame(results)
 
+# --- FRESHNESS HELPER ---
+
+def get_freshness_info(fetch_timestamp):
+    """
+    Calculate data freshness metrics.
+    Returns: (age_str, freshness_icon, is_stale)
+    """
+    if not fetch_timestamp:
+        return "Unknown", "⚪", False
+    
+    age_seconds = (datetime.now() - fetch_timestamp).total_seconds()
+    age_min = int(age_seconds // 60)
+    
+    if age_min < 1:
+        return "just now", "🟢", False
+    elif age_min < 5:
+        return f"{age_min} min ago", "🟢", False
+    elif age_min < 10:
+        return f"{age_min} min ago", "🟢", False
+    elif age_min < 15:
+        return f"{age_min} min ago", "🟡", False
+    elif age_min < 30:
+        return f"{age_min} min ago", "🟠", True
+    elif age_min < 60:
+        return f"{age_min} min ago", "🔴", True
+    else:
+        hours = age_min // 60
+        return f"{hours}h {age_min % 60}m ago", "🔴", True
+
 # --- SESSION STATE ---
 
 if 'analysis_results' not in st.session_state:
@@ -450,6 +495,10 @@ if 'min_severity_rank' not in st.session_state:
     st.session_state.min_severity_rank = 2  # Default to Moderate+
 if 'exclude_low_priority' not in st.session_state:
     st.session_state.exclude_low_priority = True
+if 'fetch_timestamp' not in st.session_state:
+    st.session_state.fetch_timestamp = None
+if 'nws_source_updated' not in st.session_state:
+    st.session_state.nws_source_updated = None
 
 # --- UI ---
 
@@ -577,6 +626,15 @@ with st.sidebar:
             with st.spinner("🌦️ Fetching Weather & Power Data (merging sources)..."):
                 weather_features, source_name, fetch_debug = fetch_weather_data_hybrid()
                 outage_features = fetch_power_outages()
+                
+                # Store fetch timestamp
+                st.session_state.fetch_timestamp = datetime.now()
+                
+                # Store NWS source-reported update time if available
+                if fetch_debug.get('nws_updated_parsed'):
+                    st.session_state.nws_source_updated = fetch_debug['nws_updated_parsed']
+                else:
+                    st.session_state.nws_source_updated = None
             
             with st.spinner(f"🔍 Analyzing against {len(weather_features)} weather alerts + {len(outage_features)} outage zones..."):
                 df_final = run_impact_analysis(
@@ -607,7 +665,7 @@ if st.session_state.analysis_results is not None:
     geom_stats = st.session_state.geom_stats
 
     # --- Metrics Row ---
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Total Clients", len(df_final))
 
     at_risk_count = len(df_final[df_final['is_at_risk'] == True])
@@ -620,6 +678,24 @@ if st.session_state.analysis_results is not None:
     valid_polys = geom_stats.get('valid_polygons', 0)
     total_feats = geom_stats.get('total_features', 0)
     col4.metric("Valid Polygons", f"{valid_polys}/{total_feats}")
+
+    # Data Freshness Metric
+    age_str, freshness_icon, is_stale = get_freshness_info(st.session_state.fetch_timestamp)
+    col5.metric(f"{freshness_icon} Data Freshness", age_str)
+
+    # --- Freshness Details Row ---
+    if st.session_state.fetch_timestamp:
+        fetch_time_str = st.session_state.fetch_timestamp.strftime('%I:%M:%S %p')
+        nws_updated_str = st.session_state.nws_source_updated or "N/A"
+        st.caption(f"🕐 **Fetched at:** {fetch_time_str} local | **NWS Source Updated:** {nws_updated_str}")
+
+    # --- Staleness Warning ---
+    if is_stale:
+        st.warning(
+            f"⏰ **Data may be stale** — Last fetched {age_str}. "
+            "Weather conditions can change rapidly. Consider clicking **🔄 Run Spatial Analysis** to refresh with current data.",
+            icon="⚠️"
+        )
 
     # Info banner about merged sources
     if "Merged" in st.session_state.weather_source:
