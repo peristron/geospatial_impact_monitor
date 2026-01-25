@@ -722,6 +722,43 @@ if st.session_state.analysis_results is not None:
         st.warning("⚠️ **Point-API Fallback Active**: Most weather alerts lack polygon geometry. "
                    "Using direct NWS point queries for each IP location.")
 
+    # --- Strategic Impact Assessment (Service Provider Context) ---
+    st.subheader("🧠 Strategic Impact Assessment")
+    
+    # Calculate counts based on risk details
+    weather_confinement_count = 0
+    probable_offline_count = 0
+
+    for _, row in df_final.iterrows():
+        if row['is_at_risk']:
+            details = str(row.get('risk_details', ''))
+            # If explicit power outage mentioned, they are likely offline
+            if "Power Outage" in details:
+                probable_offline_count += 1
+            else:
+                # If risk is present but NO power outage, assume weather confinement (high load)
+                weather_confinement_count += 1
+
+    with st.container(border=True):
+        st.markdown("""
+        **Service Provider Context:** Severe weather typically increases online traffic (users confined indoors/working remotely), 
+        while power outages cause immediate traffic drops from affected regions.
+        """)
+        
+        c1, c2 = st.columns(2)
+        
+        c1.metric(
+            "📈 Potential Usage Spike (High Load)", 
+            f"{weather_confinement_count} Clients",
+            help="Clients in active weather alert zones but WITH power. Likely 'sheltering in place', increasing network demand."
+        )
+        
+        c2.metric(
+            "📉 Probable Traffic Drop (Offline)", 
+            f"{probable_offline_count} Clients",
+            help="Clients in confirmed power outage zones. Likely offline."
+        )
+
     # --- Map ---
     st.subheader("Interactive Threat Map")
     
