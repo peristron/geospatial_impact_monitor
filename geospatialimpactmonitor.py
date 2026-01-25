@@ -394,10 +394,10 @@ with st.sidebar:
     ip_list = []
     
     if input_method == "Paste IP List":
-        # Test IPs: Mix of locations that may/may not have active weather
+        # Default IPs: higher-ed and/or k12 educational institutions using D2L Brightspace in the US South/Southeast
         raw_input = st.text_area(
-            "Paste IPs (one per line or comma-separated)", 
-            "204.196.160.7\n129.59.1.1\n8.8.8.8\n165.134.241.141", 
+            "Paste IPs (1 per line or comma-separated)", 
+            "152.97.17.168\n34.236.193.193\n24.199.66.32\n141.193.213.20\n23.185.0.2\n104.153.195.192\n128.23.35.87\n104.17.163.123", 
             height=150
         )
         if raw_input: 
