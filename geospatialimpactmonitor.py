@@ -7,15 +7,14 @@ from shapely.geometry import shape, Point
 import time
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Geospatial Impact Monitor - IP Risk Overlay", layout="wide")
+st.set_page_config(page_title="Geospatial Impact Monitor", layout="wide")
 
 # --- FUNCTIONS ---
 
-@st.cache_data(ttl=300) # Cache weather data for 5 minutes
+@st.cache_data(ttl=300)
 def fetch_active_weather_alerts():
     """
     Fetches active severe weather alerts from the US National Weather Service (NOAA).
-    Returns a list of GeoJSON features.
     """
     url = "https://api.weather.gov/alerts/active?status=actual&message_type=alert&severity=Severe,Extreme"
     headers = {"User-Agent": "(my-weather-app, contact@example.com)"}
@@ -35,13 +34,10 @@ def fetch_active_weather_alerts():
 def get_geolocation_bulk(ip_list):
     """
     Uses ip-api.com batch endpoint to geolocate IPs.
-    Limit: 100 IPs per batch. Free tier limitations apply.
     """
-    # IP-API batch endpoint accepts max 100 IPs
     url = "http://ip-api.com/batch"
     coords = []
     
-    # Chunk list into 100s
     chunk_size = 100
     for i in range(0, len(ip_list), chunk_size):
         chunk = ip_list[i:i + chunk_size]
@@ -64,7 +60,6 @@ def get_geolocation_bulk(ip_list):
                         'city': "N/A", 
                         'region': "N/A"
                     })
-            # Respect rate limits (though batch is efficient, a small sleep is polite)
             time.sleep(1) 
         except Exception as e:
             st.error(f"Error locating IPs: {e}")
@@ -72,12 +67,9 @@ def get_geolocation_bulk(ip_list):
     return pd.DataFrame(coords)
 
 def check_intersection(df_ips, weather_features):
-    """
-    Performs Point-in-Polygon analysis.
-    """
     results = []
     
-    # 1. Convert Weather Features to Shapely Polygons
+    # Pre-process polygons
     alert_polygons = []
     for feature in weather_features:
         geom = feature.get('geometry')
@@ -88,25 +80,23 @@ def check_intersection(df_ips, weather_features):
                 alert_polygons.append({
                     'poly': poly,
                     'event': props.get('event'),
-                    'severity': props.get('severity'),
-                    'headline': props.get('headline')
+                    'severity': props.get('severity')
                 })
             except:
                 continue
 
-    # 2. Iterate through IPs
     for index, row in df_ips.iterrows():
         is_at_risk = False
         risk_details = "None"
         
         if pd.notnull(row['lat']):
-            point = Point(row['lon'], row['lat']) # Shapely uses (Lon, Lat)
+            point = Point(row['lon'], row['lat'])
             
             for alert in alert_polygons:
                 if alert['poly'].contains(point):
                     is_at_risk = True
                     risk_details = f"{alert['severity']} - {alert['event']}"
-                    break # Stop checking after first hit for simplicity
+                    break 
         
         results.append({
             **row,
@@ -116,12 +106,22 @@ def check_intersection(df_ips, weather_features):
         
     return pd.DataFrame(results)
 
+# --- INITIALIZE SESSION STATE ---
+# This prevents the app from wiping data when you interact with the map
+if 'analysis_results' not in st.session_state:
+    st.session_state.analysis_results = None
+if 'weather_data' not in st.session_state:
+    st.session_state.weather_data = None
+
 # --- UI LAYOUT ---
 
 st.title("🌩️ Geospatial Impact Monitor")
+
+# Updated Subheading
 st.markdown("""
-This tool performs a **point-in-polygon analysis** to determine if client IP addresses 
-are located within active US National Weather Service severe weather zones.
+This tool leverages **public US National Weather Service data** to perform a **point-in-polygon analysis**, 
+determining if client IP addresses are located within active severe weather zones.  
+*Optimized for US-based IP addresses using open-source intelligence (OSINT) sources.*
 """)
 
 # Sidebar Input
@@ -145,32 +145,38 @@ with st.sidebar:
                 else:
                     df = pd.read_excel(uploaded_file)
                 
-                # Assume the column is named 'ip' or take the first column
                 col_name = 'ip' if 'ip' in df.columns.str.lower() else df.columns[0]
                 ip_list = df[col_name].astype(str).tolist()
                 st.success(f"Loaded {len(ip_list)} IPs")
             except Exception as e:
                 st.error("Error reading file. Ensure there is a column of IPs.")
 
-    run_analysis = st.button("Run Spatial Analysis")
+    # Triggers the processing
+    if st.button("Run Spatial Analysis"):
+        if ip_list:
+            with st.spinner("Fetching Geolocation Data..."):
+                df_geo = get_geolocation_bulk(ip_list)
+                
+            with st.spinner("Fetching Live Weather Polygons..."):
+                weather_features = fetch_active_weather_alerts()
+                
+            with st.spinner("Calculating Spatial Intersections..."):
+                df_final = check_intersection(df_geo, weather_features)
+            
+            # SAVE TO SESSION STATE
+            st.session_state.analysis_results = df_final
+            st.session_state.weather_data = weather_features
+        else:
+            st.warning("Please provide IP addresses first.")
 
-# Main Execution
-if run_analysis and ip_list:
-    with st.spinner("Fetching Geolocation Data..."):
-        # 1. Geolocate IPs
-        df_geo = get_geolocation_bulk(ip_list)
-        
-    with st.spinner("Fetching Live Weather Polygons..."):
-        # 2. Get Weather
-        weather_features = fetch_active_weather_alerts()
-        st.info(f"Analyzed against {len(weather_features)} active severe weather alerts.")
+# --- RESULTS DISPLAY ---
 
-    with st.spinner("Calculating Spatial Intersections..."):
-        # 3. Perform Overlay
-        df_final = check_intersection(df_geo, weather_features)
-
-    # --- RESULTS DISPLAY ---
+# We check if data exists in session_state, rather than if the button was just clicked
+if st.session_state.analysis_results is not None:
     
+    df_final = st.session_state.analysis_results
+    weather_features = st.session_state.weather_data
+
     # Summary Metrics
     col1, col2 = st.columns(2)
     total_ips = len(df_final)
@@ -179,22 +185,25 @@ if run_analysis and ip_list:
     col1.metric("Total Clients Mapped", total_ips)
     col2.metric("Clients in Hazard Zones", at_risk_ips, delta_color="inverse")
 
+    if weather_features:
+        st.caption(f"Visualizing against {len(weather_features)} active severe weather cells.")
+
     # Map Visualization
     st.subheader("Interactive Threat Map")
     
-    # Center map on the US or the average of IPs
     if not df_final.empty and pd.notnull(df_final.iloc[0]['lat']):
         center_lat = df_final['lat'].mean()
         center_lon = df_final['lon'].mean()
     else:
-        center_lat, center_lon = 39.8283, -98.5795 # US Center
+        center_lat, center_lon = 39.8283, -98.5795 
 
     m = folium.Map(location=[center_lat, center_lon], zoom_start=4)
 
-    # Add Weather Polygons (Red)
-    for feature in weather_features:
-        style_function = lambda x: {'fillColor': '#ff0000', 'color': '#ff0000', 'fillOpacity': 0.3, 'weight': 1}
-        folium.GeoJson(feature, style_function=style_function).add_to(m)
+    # Add Weather Polygons
+    if weather_features:
+        for feature in weather_features:
+            style_function = lambda x: {'fillColor': '#ff0000', 'color': '#ff0000', 'fillOpacity': 0.3, 'weight': 1}
+            folium.GeoJson(feature, style_function=style_function).add_to(m)
 
     # Add IP Markers
     for _, row in df_final.iterrows():
@@ -214,11 +223,9 @@ if run_analysis and ip_list:
                 icon=folium.Icon(color=color, icon=icon, prefix='fa')
             ).add_to(m)
 
+    # st_folium creates the interactive element
     st_folium(m, width=1200, height=500)
 
     # Data Table
     st.subheader("Detailed Exposure Report")
     st.dataframe(df_final)
-
-elif run_analysis and not ip_list:
-    st.warning("Please enter an IP or upload a file.")
