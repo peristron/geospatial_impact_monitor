@@ -9,11 +9,9 @@ import time
 from datetime import datetime
 
 # --- CONFIGURATION ---
-
 st.set_page_config(page_title="Geospatial Impact Monitor", layout="wide")
 
 # --- SEVERITY CONFIGURATION ---
-
 SEVERITY_LEVELS = {
     'Extreme': 4,
     'Severe': 3,
@@ -129,10 +127,10 @@ def fetch_weather_data_hybrid():
         source_name = " + ".join(sources_used) + " (Merged)"
     else:
         source_name = "No Data"
-    
+
     debug_info['sources_used'] = sources_used
     debug_info['total_merged_features'] = len(all_features)
-    
+
     return all_features, source_name, debug_info
 
 def check_point_alerts_nws(lat, lon, min_severity_rank=0, exclude_low_priority=False):
@@ -151,7 +149,7 @@ def check_point_alerts_nws(lat, lon, min_severity_rank=0, exclude_low_priority=F
             alerts = []
             for f in features:
                 props = f.get('properties', {})
-
+                
                 # Apply severity filter
                 if not passes_severity_threshold(props, min_severity_rank, exclude_low_priority):
                     continue
@@ -177,7 +175,7 @@ def fetch_power_outages():
     Errs on the side of caution by including outages from all available sources.
     """
     all_features = []
-    seen_counties = set()  # Track to avoid duplicates
+    seen_counties = set() # Track to avoid duplicates
 
     # 1. Try HIFLD (ArcGIS)
     hifld_url = "https://services1.arcgis.com/0MSEUqKaxRlEPj5g/arcgis/rest/services/Power_Outages_County_Level/FeatureServer/0/query"
@@ -449,10 +447,10 @@ def get_freshness_info(fetch_timestamp):
     """
     if not fetch_timestamp:
         return "Unknown", "⚪", False
-    
+
     age_seconds = (datetime.now() - fetch_timestamp).total_seconds()
     age_min = int(age_seconds // 60)
-    
+
     if age_min < 1:
         return "just now", "🟢", False
     elif age_min < 5:
@@ -492,7 +490,7 @@ if 'geo_data' not in st.session_state:
 if 'enable_fallback' not in st.session_state:
     st.session_state.enable_fallback = True
 if 'min_severity_rank' not in st.session_state:
-    st.session_state.min_severity_rank = 2  # Default to Moderate+
+    st.session_state.min_severity_rank = 2 # Default to Moderate+
 if 'exclude_low_priority' not in st.session_state:
     st.session_state.exclude_low_priority = True
 if 'fetch_timestamp' not in st.session_state:
@@ -509,9 +507,9 @@ st.markdown("How it works: Enter IP addresses (from clients, users, or devices) 
 
 def rerun_analysis_with_filters():
     """Re-run analysis with current filter settings using cached data."""
-    if (st.session_state.geo_data is not None and 
+    if (st.session_state.geo_data is not None and
         st.session_state.weather_data is not None):
-        
+
         df_final = run_impact_analysis(
             st.session_state.geo_data,
             st.session_state.weather_data,
@@ -559,7 +557,7 @@ with st.sidebar:
 
     st.divider()
     st.subheader("⚙️ Alert Filters")
-
+    
     severity_options = ['All Alerts', 'Minor+', 'Moderate+', 'Severe+', 'Extreme Only']
     
     # Map selection to numeric threshold
@@ -588,7 +586,7 @@ with st.sidebar:
     if new_severity_rank != st.session_state.min_severity_rank:
         st.session_state.min_severity_rank = new_severity_rank
         rerun_analysis_with_filters()
-
+    
     exclude_low_priority = st.checkbox(
         "Exclude Informational Alerts", 
         value=st.session_state.exclude_low_priority,
@@ -683,6 +681,24 @@ if st.session_state.analysis_results is not None:
     age_str, freshness_icon, is_stale = get_freshness_info(st.session_state.fetch_timestamp)
     col5.metric(f"{freshness_icon} Data Freshness", age_str)
 
+    # --- Quick Context Caption ---
+    st.caption(
+        "**Metrics:** Clients at Risk = IPs in active alert/outage zones · "
+        "Valid Polygons = mappable alert boundaries (0 is OK if Point-API fallback is enabled)"
+    )
+
+    # --- Detailed Help Expander ---
+    with st.expander("ℹ️ What do these metrics mean?"):
+        st.markdown("""
+| Metric | Description |
+| :--- | :--- |
+| **Total Clients** | Count of unique IP addresses that were successfully geolocated. IPs that couldn't be located (private ranges, invalid) are excluded from analysis. |
+| **Clients at Risk** | Locations that fall within an active weather alert polygon OR a power outage zone. The red delta shows how many are affected. |
+| **Weather Source** | Where alert data was fetched from. **IEM** = Iowa Environmental Mesonet (real-time storm polygons). **NWS** = National Weather Service (official alerts, often zone-based). **Merged** = both sources combined for maximum coverage. |
+| **Valid Polygons** | How many alerts have geographic boundaries that can be mapped. A low number (or 0) is common — many NWS alerts use "zones" instead of precise shapes. When this is low, the Point-API Fallback queries each IP's location directly against NWS. |
+| **Data Freshness** | Time since alert data was fetched. Color code: 🟢 Fresh (<10 min) · 🟡 Recent (10-15 min) · 🟠 Aging (15-30 min) · 🔴 Stale (>30 min). Weather changes fast — refresh if stale! |
+        """)
+
     # --- Freshness Details Row ---
     if st.session_state.fetch_timestamp:
         fetch_time_str = st.session_state.fetch_timestamp.strftime('%I:%M:%S %p')
@@ -708,15 +724,15 @@ if st.session_state.analysis_results is not None:
 
     # --- Map ---
     st.subheader("Interactive Threat Map")
-
+    
     if not df_final.empty and pd.notnull(df_final.iloc[0].get('lat')):
         center_lat = df_final['lat'].mean()
         center_lon = df_final['lon'].mean()
     else:
         center_lat, center_lon = 39.8283, -98.5795
-
+        
     m = folium.Map(location=[center_lat, center_lon], zoom_start=4, tiles='CartoDB positron')
-
+    
     # Layer: Power Outages (black)
     for feat in outage_features:
         try:
@@ -726,7 +742,7 @@ if st.session_state.analysis_results is not None:
             folium.GeoJson(feat, style_function=style, tooltip=tooltip).add_to(m)
         except:
             continue
-
+            
     # Layer: Weather Polygons (color-coded by type)
     for feat in weather_features:
         geom = feat.get('geometry')
@@ -766,7 +782,7 @@ if st.session_state.analysis_results is not None:
             folium.GeoJson(feat, style_function=style, tooltip=tooltip).add_to(m)
         except:
             continue
-
+            
     # Layer: IP Markers
     for _, row in df_final.iterrows():
         if pd.notnull(row.get('lat')):
@@ -791,25 +807,25 @@ if st.session_state.analysis_results is not None:
 
     # --- Data Table ---
     st.subheader("Analysis Results")
-
+    
     # Create a clean display dataframe with status emoji
     df_display = df_final.copy()
     df_display['Status'] = df_display['is_at_risk'].apply(
         lambda x: '🔴 AT RISK' if x else '🟢 Clear'
     )
-
+    
     # Reorder columns for clarity
     display_cols = ['Status', 'ip', 'city', 'region', 'risk_details']
     if 'check_method' in df_display.columns:
         display_cols.append('check_method')
-
+    
     # Filter out the boolean column since we have Status now
     st.dataframe(
         df_display[display_cols],
         use_container_width=True,
         hide_index=True
     )
-
+    
     # Summary counts
     at_risk_df = df_final[df_final['is_at_risk'] == True]
     if not at_risk_df.empty:
