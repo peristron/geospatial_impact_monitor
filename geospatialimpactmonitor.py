@@ -43,14 +43,13 @@ def fetch_active_weather_alerts():
 @st.cache_data(ttl=600)
 def fetch_power_outages():
     """
-    Fetches US County Level Power Outage data from HIFLD (Homeland Infrastructure Foundation-Level Data).
-    Returns GeoJSON of counties with > 0% outages.
+    Fetches US County Level Power Outage data from HIFLD.
+    Returns GeoJSON of counties with > 0.5% outages.
     """
-    # Public ArcGIS REST Endpoint for US Power Outages
     url = "https://services1.arcgis.com/0MSEUqKaxRlEPj5g/arcgis/rest/services/Power_Outages_County_Level/FeatureServer/0/query"
     
     params = {
-        'where': "Percent_Out > 0.5", # Filter: Only show counties with > 0.5% outage to reduce noise
+        'where': "Percent_Out > 0.5", 
         'outFields': "NAME,State,Percent_Out,Total_Out",
         'f': 'geojson'
     }
@@ -60,7 +59,7 @@ def fetch_power_outages():
         if response.status_code == 200:
             return response.json().get('features', [])
         return []
-    except Exception as e:
+    except Exception:
         return []
 
 def get_geolocation_bulk(ip_list):
@@ -105,6 +104,10 @@ def get_geolocation_bulk(ip_list):
 def run_impact_analysis(df_ips, weather_features, outage_features):
     results = []
     
+    # Ensure inputs are lists to prevent iteration errors
+    weather_features = weather_features or []
+    outage_features = outage_features or []
+
     # 1. Process Weather Polygons
     weather_polys = []
     for feature in weather_features:
@@ -146,14 +149,14 @@ def run_impact_analysis(df_ips, weather_features, outage_features):
                 if alert['poly'].contains(point):
                     is_at_risk = True
                     hazards.append(alert['desc'])
-                    break # Record first weather hit
+                    break 
             
             # Check Power
             for outage in outage_polys:
                 if outage['poly'].contains(point):
                     is_at_risk = True
                     hazards.append(outage['desc'])
-                    break # Record first outage hit
+                    break 
         
         results.append({
             **row,
@@ -222,18 +225,24 @@ with st.sidebar:
             st.session_state.analysis_results = df_final
             st.session_state.weather_data = weather_features
             st.session_state.outage_data = outage_features
+        else:
+            st.warning("Enter IP addresses first.")
 
 # --- RESULTS DISPLAY ---
 
 if st.session_state.analysis_results is not None:
     
     df_final = st.session_state.analysis_results
-    weather_features = st.session_state.weather_data
-    outage_features = st.session_state.outage_data
+    
+    # DEFENSIVE CODING: Use 'or []' to default to empty list if data is None
+    weather_features = st.session_state.weather_data or []
+    outage_features = st.session_state.outage_data or []
 
     col1, col2, col3 = st.columns(3)
     col1.metric("Total Clients", len(df_final))
     col2.metric("Clients at Risk", len(df_final[df_final['is_at_risk'] == True]), delta_color="inverse")
+    
+    # This was the line causing the error. Now it's safe.
     col3.metric("Data Points Analyzed", len(weather_features) + len(outage_features))
 
     # Map Visualization
