@@ -1200,7 +1200,7 @@ with tab_mapper:
         st.caption(projection_info.get(selected_projection, ""))
         
 
-    # Center point rotation for azimuthal projections
+        # Center point rotation for azimuthal projections
         globe_rotation = None
         azimuthal_projections = ['orthographic', 'azimuthal equal area', 'azimuthal equidistant', 'stereographic', 'gnomonic']
         
@@ -1211,28 +1211,52 @@ with tab_mapper:
                 st.markdown("**Projection Center Point**")
                 st.caption("Distances/areas measured from this point")
             
-            rot_lon = st.slider("Center Longitude", -180, 180, 0, key="globe_rot_lon")
-            rot_lat = st.slider("Center Latitude", -90, 90, 20, key="globe_rot_lat")
-            globe_rotation = dict(lon=rot_lon, lat=rot_lat)
+            # Initialize default values if not set
+            if 'center_lon' not in st.session_state:
+                st.session_state.center_lon = 0
+            if 'center_lat' not in st.session_state:
+                st.session_state.center_lat = 20
             
-            # Quick presets for common centers
+            # Callback functions for presets (run BEFORE widget render on next rerun)
+            def set_preset_nyc():
+                st.session_state.center_lon = -74
+                st.session_state.center_lat = 41
+            
+            def set_preset_london():
+                st.session_state.center_lon = 0
+                st.session_state.center_lat = 51
+            
+            def set_preset_tokyo():
+                st.session_state.center_lon = 140
+                st.session_state.center_lat = 36
+            
+            # Quick presets (placed BEFORE sliders so callbacks set values before slider renders)
             st.markdown("**Quick Presets:**")
             preset_cols = st.columns(3)
             with preset_cols[0]:
-                if st.button("🗽 New York", key="preset_nyc"):
-                    st.session_state.globe_rot_lon = -74
-                    st.session_state.globe_rot_lat = 41
-                    st.rerun()
+                st.button("🗽 NYC", key="preset_nyc", on_click=set_preset_nyc)
             with preset_cols[1]:
-                if st.button("🗼 London", key="preset_london"):
-                    st.session_state.globe_rot_lon = 0
-                    st.session_state.globe_rot_lat = 51
-                    st.rerun()
+                st.button("🗼 London", key="preset_london", on_click=set_preset_london)
             with preset_cols[2]:
-                if st.button("🗻 Tokyo", key="preset_tokyo"):
-                    st.session_state.globe_rot_lon = 140
-                    st.session_state.globe_rot_lat = 36
-                    st.rerun() 
+                st.button("🗻 Tokyo", key="preset_tokyo", on_click=set_preset_tokyo)
+            
+            # Sliders use session state values (updated by callbacks on previous run)
+            rot_lon = st.slider(
+                "Center Longitude", -180, 180, 
+                value=st.session_state.center_lon,
+                key="slider_rot_lon"
+            )
+            rot_lat = st.slider(
+                "Center Latitude", -90, 90, 
+                value=st.session_state.center_lat,
+                key="slider_rot_lat"
+            )
+            
+            # Update session state when sliders change manually
+            st.session_state.center_lon = rot_lon
+            st.session_state.center_lat = rot_lat
+            
+            globe_rotation = dict(lon=rot_lon, lat=rot_lat)                    
         st.divider()
         
         # Marker settings
