@@ -1396,18 +1396,44 @@ with tab_mapper:
         st.info("👈 Enter locations in the sidebar and click **Generate Map** to visualize.")
         
         # Show projection examples
+
         with st.expander("🌐 About Map Projections"):
             st.markdown("""
             **Map projections** transform the 3D Earth onto a 2D surface. Each projection makes trade-offs:
             
-            | Projection | Best For | Trade-off |
-            |------------|----------|-----------|
-            | **Natural Earth** | General world maps | Balanced compromise |
-            | **Mercator** | Navigation, web maps | Extreme polar distortion |
-            | **Orthographic** | Visual appeal, globe view | Only shows half the Earth |
+            ### Compromise Projections
+            | Projection | Best For | Notes |
+            |------------|----------|-------|
+            | **Natural Earth** | General world maps | Balanced, visually pleasing |
             | **Robinson** | Thematic world maps | Slight distortion everywhere |
-            | **Mollweide** | Showing global distributions | Shape distortion at edges |
-            | **Winkel Tripel** | Reference maps (Nat Geo) | Compromise projection |
+            | **Winkel Tripel** | Reference maps | Used by National Geographic |
             
-            *Try different projections to see how they change the appearance of your data!*
+            ### Azimuthal Projections (centered on a point)
+            | Projection | Best For | Key Property |
+            |------------|----------|--------------|
+            | **Orthographic** | Visual appeal, presentations | Looks like a globe from space |
+            | **Azimuthal Equidistant** | Range/distance maps | Distances from center are accurate |
+            | **Azimuthal Equal Area** | Distribution from a point | Areas are accurate |
+            | **Gnomonic** | Navigation, flight planning | Great circles are straight lines |
+            
+            ### Cylindrical Projections
+            | Projection | Best For | Key Property |
+            |------------|----------|--------------|
+            | **Mercator** | Navigation, web maps | Preserves angles, extreme polar distortion |
+            | **Transverse Mercator** | Narrow N-S regions, UTM | Very accurate in limited zones |
+            
+            ### Equal-Area Projections
+            | Projection | Best For | Key Property |
+            |------------|----------|--------------|
+            | **Mollweide** | Global distributions | Accurate area comparison |
+            | **Eckert IV** | Thematic maps | Rounded corners, pleasant shape |
+            
+            ### Conic Projections
+            | Projection | Best For | Key Property |
+            |------------|----------|--------------|
+            | **Conic Conformal** | Aeronautical charts | Preserves angles |
+            | **Albers USA** | US maps specifically | Alaska/Hawaii repositioned |
+            
+            ---
+            💡 **Tip:** For "distance from a location" analysis, use **Azimuthal Equidistant** centered on your point of interest!
             """)
