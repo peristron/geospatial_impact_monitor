@@ -1163,21 +1163,39 @@ with tab_mapper:
         
         # Projection info
         projection_info = {
+            # Compromise
             'natural earth': "Balanced compromise projection, good for world maps",
-            'mercator': "Preserves angles, distorts size at poles. Standard web map projection",
-            'orthographic': "3D globe appearance, shows Earth as seen from space",
             'robinson': "Compromise projection, widely used for world maps",
-            'miller': "Modified Mercator with less polar distortion",
-            'equirectangular': "Simple lat/lon grid, preserves distances along equator",
-            'mollweide': "Equal-area, good for showing global distributions",
             'winkel tripel': "Compromise projection used by National Geographic",
             'aitoff': "Modified azimuthal, good for world maps",
             'kavrayskiy7': "Compromise projection with minimal distortion",
-            'azimuthal equal area': "Preserves area, centered on a point",
-            'stereographic': "Conformal, used for polar regions",
-            'hammer': "Equal-area, similar to Mollweide",
+            
+            # Cylindrical
+            'mercator': "Preserves angles, distorts size at poles. Standard web map projection",
+            'miller': "Modified Mercator with less polar distortion",
+            'equirectangular': "Simple lat/lon grid, preserves distances along equator",
+            'transverse mercator': "Accurate for narrow north-south regions (UTM zones)",
+            
+            # Azimuthal
+            'orthographic': "3D globe appearance, shows Earth as seen from space",
+            'azimuthal equal area': "Preserves area from center point outward",
+            'azimuthal equidistant': "Preserves distances from center — ideal for range/radius maps",
+            'stereographic': "Conformal (preserves shapes), used for polar regions",
+            'gnomonic': "Great circles appear as straight lines — shows shortest paths",
+            
+            # Equal-area
+            'mollweide': "Equal-area, good for showing global distributions",
+            'hammer': "Equal-area, elliptical shape, similar to Mollweide",
             'sinusoidal': "Equal-area, preserves distances along parallels",
-            'conic equal area': "Equal-area, good for mid-latitudes",
+            'eckert4': "Equal-area with rounded corners, popular for thematic maps",
+            
+            # Conic
+            'conic equal area': "Equal-area, good for mid-latitude regions",
+            'conic conformal': "Preserves angles, used for aeronautical charts",
+            'conic equidistant': "Preserves distances along meridians",
+            
+            # Special
+            'albers usa': "Optimized specifically for contiguous US + Alaska + Hawaii",
         }
         st.caption(projection_info.get(selected_projection, ""))
         
