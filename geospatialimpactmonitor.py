@@ -15,21 +15,39 @@ st.set_page_config(page_title="Geospatial Impact Monitor", layout="wide")
 
 # --- PROJECTION OPTIONS FOR GLOBAL MAPPER ---
 PROJECTION_OPTIONS = {
+    # Compromise projections (balanced distortion)
     'Natural Earth': 'natural earth',
-    'Mercator': 'mercator',
-    'Orthographic (Globe)': 'orthographic',
     'Robinson': 'robinson',
-    'Miller': 'miller',
-    'Equirectangular': 'equirectangular',
-    'Mollweide': 'mollweide',
     'Winkel Tripel': 'winkel tripel',
     'Aitoff': 'aitoff',
     'Kavrayskiy VII': 'kavrayskiy7',
+    
+    # Cylindrical projections
+    'Mercator': 'mercator',
+    'Miller': 'miller',
+    'Equirectangular': 'equirectangular',
+    'Transverse Mercator': 'transverse mercator',
+    
+    # Azimuthal projections
+    'Orthographic (Globe)': 'orthographic',
     'Azimuthal Equal Area': 'azimuthal equal area',
+    'Azimuthal Equidistant': 'azimuthal equidistant',
     'Stereographic': 'stereographic',
+    'Gnomonic': 'gnomonic',
+    
+    # Equal-area projections
+    'Mollweide': 'mollweide',
     'Hammer': 'hammer',
     'Sinusoidal': 'sinusoidal',
+    'Eckert IV': 'eckert4',
+    
+    # Conic projections
     'Conic Equal Area': 'conic equal area',
+    'Conic Conformal': 'conic conformal',
+    'Conic Equidistant': 'conic equidistant',
+    
+    # Special purpose
+    'Albers USA': 'albers usa',
 }
 
 # --- SEVERITY CONFIGURATION ---
