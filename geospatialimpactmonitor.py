@@ -1199,14 +1199,40 @@ with tab_mapper:
         }
         st.caption(projection_info.get(selected_projection, ""))
         
-        # Globe rotation for orthographic
+
+    # Center point rotation for azimuthal projections
         globe_rotation = None
-        if selected_projection == 'orthographic':
-            st.markdown("**Globe Rotation**")
-            rot_lon = st.slider("Longitude", -180, 180, 0, key="globe_rot_lon")
-            rot_lat = st.slider("Latitude", -90, 90, 20, key="globe_rot_lat")
-            globe_rotation = dict(lon=rot_lon, lat=rot_lat)
+        azimuthal_projections = ['orthographic', 'azimuthal equal area', 'azimuthal equidistant', 'stereographic', 'gnomonic']
         
+        if selected_projection in azimuthal_projections:
+            if selected_projection == 'orthographic':
+                st.markdown("**Globe View Center**")
+            else:
+                st.markdown("**Projection Center Point**")
+                st.caption("Distances/areas measured from this point")
+            
+            rot_lon = st.slider("Center Longitude", -180, 180, 0, key="globe_rot_lon")
+            rot_lat = st.slider("Center Latitude", -90, 90, 20, key="globe_rot_lat")
+            globe_rotation = dict(lon=rot_lon, lat=rot_lat)
+            
+            # Quick presets for common centers
+            st.markdown("**Quick Presets:**")
+            preset_cols = st.columns(3)
+            with preset_cols[0]:
+                if st.button("🗽 New York", key="preset_nyc"):
+                    st.session_state.globe_rot_lon = -74
+                    st.session_state.globe_rot_lat = 41
+                    st.rerun()
+            with preset_cols[1]:
+                if st.button("🗼 London", key="preset_london"):
+                    st.session_state.globe_rot_lon = 0
+                    st.session_state.globe_rot_lat = 51
+                    st.rerun()
+            with preset_cols[2]:
+                if st.button("🗻 Tokyo", key="preset_tokyo"):
+                    st.session_state.globe_rot_lon = 140
+                    st.session_state.globe_rot_lat = 36
+                    st.rerun() 
         st.divider()
         
         # Marker settings
