@@ -911,50 +911,53 @@ with tab_impact:
             help="Query NWS directly for each IP location when polygon geometry is unavailable"
         )
         
-        # Update session state and trigger re-analysis if changed
+        # updates session state and trigger re-analysis if changed
         if enable_fallback != st.session_state.enable_fallback:
             st.session_state.enable_fallback = enable_fallback
             rerun_analysis_with_filters()
 
         if st.button("🔄 Run Spatial Analysis", type="primary", key="run_impact_analysis"):
             if ip_list:
-                # Clear cache for fresh data
+                # clear cache for fresh data
                 st.cache_data.clear()
                 
                 with st.spinner("📍 Geolocating IPs..."):
                     df_geo = get_geolocation_bulk(ip_list)
-                    st.session_state.geo_data = df_geo  # Store for re-analysis
-                with st.spinner("🌦️ Fetching Weather & Power Data (merging sources)..."):
-                    # Define a wrapper to run fetches in parallel
+                    st.session_state.geo_data = df_geo  # store for re-analysis
+                with st.spinner("🌦️ Fetching Weather, Power & Seismic Data (merging sources)..."):
+                    # define wrapper to run fetches in parallel
                     def run_parallel_fetches():
                         with concurrent.futures.ThreadPoolExecutor() as executor:
-                            # Submit tasks to threads
+                            # to submit tasks to threads
                             future_weather = executor.submit(fetch_weather_data_hybrid)
                             future_outage = executor.submit(fetch_power_outages)
+                            future_quakes = executor.submit(fetch_earthquakes)
                             
-                            # Wait for results
+                            # wait for results
                             weather_result = future_weather.result()
                             outage_result = future_outage.result()
+                            quake_result = future_quakes.result()
                             
-                            return weather_result, outage_result
+                            return weather_result, outage_result, quake_result
 
-                    # Execute the parallel fetch
-                    (weather_features, source_name, fetch_debug), outage_features = run_parallel_fetches()
+                    # executes parallel fetch
+                    (weather_features, source_name, fetch_debug), outage_features, earthquake_features = run_parallel_fetches()
 
-                    # Store fetch timestamp
+                    # stores fetch timestamp
                     st.session_state.fetch_timestamp = datetime.now()
                     
-                    # Store NWS source-reported update time if available
+                    # to store NWS source-reported update time if available
                     if fetch_debug.get('nws_updated_parsed'):
                         st.session_state.nws_source_updated = fetch_debug['nws_updated_parsed']
                     else:
                         st.session_state.nws_source_updated = None
                 
-                with st.spinner(f"🔍 Analyzing against {len(weather_features)} weather alerts + {len(outage_features)} outage zones..."):
+                with st.spinner(f"🔍 Analyzing against {len(weather_features)} weather alerts, {len(outage_features)} outage zones, and {len(earthquake_features)} recent quakes..."):
                     df_final = run_impact_analysis(
                         df_geo, 
                         weather_features, 
-                        outage_features, 
+                        outage_features,
+                        earthquake_features=earthquake_features,
                         enable_point_fallback=st.session_state.enable_fallback,
                         min_severity_rank=st.session_state.min_severity_rank,
                         exclude_low_priority=st.session_state.exclude_low_priority
@@ -965,6 +968,7 @@ with tab_impact:
                 st.session_state.weather_source = source_name
                 st.session_state.fetch_debug = fetch_debug
                 st.session_state.outage_data = outage_features
+                st.session_state.earthquake_data = earthquake_features
                 
                 st.success("Analysis complete!")
             else:
