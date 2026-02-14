@@ -845,11 +845,23 @@ with tab_impact:
                 with st.spinner("📍 Geolocating IPs..."):
                     df_geo = get_geolocation_bulk(ip_list)
                     st.session_state.geo_data = df_geo  # Store for re-analysis
-                
                 with st.spinner("🌦️ Fetching Weather & Power Data (merging sources)..."):
-                    weather_features, source_name, fetch_debug = fetch_weather_data_hybrid()
-                    outage_features = fetch_power_outages()
-                    
+                    # Define a wrapper to run fetches in parallel
+                    def run_parallel_fetches():
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            # Submit tasks to threads
+                            future_weather = executor.submit(fetch_weather_data_hybrid)
+                            future_outage = executor.submit(fetch_power_outages)
+                            
+                            # Wait for results
+                            weather_result = future_weather.result()
+                            outage_result = future_outage.result()
+                            
+                            return weather_result, outage_result
+
+                    # Execute the parallel fetch
+                    (weather_features, source_name, fetch_debug), outage_features = run_parallel_fetches()
+
                     # Store fetch timestamp
                     st.session_state.fetch_timestamp = datetime.now()
                     
