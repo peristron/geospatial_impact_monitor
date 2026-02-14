@@ -766,6 +766,8 @@ if 'fetch_debug' not in st.session_state:
     st.session_state.fetch_debug = {}
 if 'outage_data' not in st.session_state:
     st.session_state.outage_data = None
+if 'earthquake_data' not in st.session_state:
+    st.session_state.earthquake_data = None
 if 'geom_stats' not in st.session_state:
     st.session_state.geom_stats = {}
 if 'using_point_fallback' not in st.session_state:
