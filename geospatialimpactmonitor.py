@@ -1442,6 +1442,19 @@ with tab_mapper:
                 st.session_state.global_mapper_data = mapper_locations
                 st.session_state.global_mapper_projection = selected_projection
 
+            # --- AUTO-SWITCH TO TAB 2 (JavaScript) ---
+            # This script simulates a click on the second tab (Index 1)
+            # It runs silently in the background
+            js_switch_tab = """
+            <script>
+                var tabs = window.parent.document.querySelectorAll('button[data-baseweb="tab"]');
+                if (tabs.length > 1) {
+                    tabs[1].click();
+                }
+            </script>
+            """
+            components.html(js_switch_tab, height=0)
+
     # --- Display Global Map ---
     # Use Session State data AND Session State projection (ensures map matches the button click)
     if st.session_state.global_mapper_data is not None and not st.session_state.global_mapper_data.empty:
