@@ -905,7 +905,7 @@ with tab_impact:
                     st.session_state.fetch_timestamp = datetime.now()
                     st.session_state.nws_source_updated = fetch_debug.get('nws_updated_parsed')
                 
-                with st.spinner(f"🔍 Analyzing against {len(weather_features)} weather alerts, {len(outage_features)} outages, {len(earthquake_features)} quakes, {len(wildfire_features)} fires..."):
+                with st.spinner(f"🔍 Cross-referencing locations against {len(weather_features)} weather alerts, {len(outage_features)} power outages, {len(earthquake_features)} earthquakes, and {len(wildfire_features)} wildfires..."):
                     df_final = run_impact_analysis(
                         df_geo, 
                         weather_features, 
