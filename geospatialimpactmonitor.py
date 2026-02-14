@@ -820,7 +820,8 @@ with tab_impact:
     st.markdown("**How it works:** Enter IP addresses (from clients, users, or devices) to assess risks from active weather alerts and power outages. The app geolocates each IP, then checks against ~real-time data from NOAA and other sources using zone intersections and targeted queries for accurate impact detection. The engine 'errs on the side of caution', so if 1 datasource shows a severe alert, and another related datasource shows moderate, the app shows 'severe'.")
 
     with st.sidebar:
-        st.header("🌩️ Impact Monitor")
+        st.header("🌩️ Impact Monitor Controls")
+        st.caption("Settings for the **Impact Monitor** tab")
         st.subheader("Data Input")
         input_method = st.radio("Method", ["Paste IP List", "Bulk Upload"], key="impact_input_method")
         ip_list = []
