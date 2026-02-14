@@ -887,41 +887,32 @@ with tab_impact:
                 
                 with st.spinner("📍 Geolocating IPs..."):
                     df_geo = get_geolocation_bulk(ip_list)
-                    st.session_state.geo_data = df_geo  # store for re-analysis
-                with st.spinner("🌦️ Fetching Weather, Power & Seismic Data (merging sources)..."):
-                    # define wrapper to run fetches in parallel
+                    st.session_state.geo_data = df_geo
+                
+                with st.spinner("🔥 Fetching Weather, Power, Quakes & Wildfires..."):
                     def run_parallel_fetches():
                         with concurrent.futures.ThreadPoolExecutor() as executor:
-                            # to submit tasks to threads
                             future_weather = executor.submit(fetch_weather_data_hybrid)
                             future_outage = executor.submit(fetch_power_outages)
                             future_quakes = executor.submit(fetch_earthquakes)
+                            future_fires = executor.submit(fetch_wildfires)
                             
-                            # wait for results
-                            weather_result = future_weather.result()
-                            outage_result = future_outage.result()
-                            quake_result = future_quakes.result()
-                            
-                            return weather_result, outage_result, quake_result
+                            return (future_weather.result(), future_outage.result(), 
+                                    future_quakes.result(), future_fires.result())
 
-                    # executes parallel fetch
-                    (weather_features, source_name, fetch_debug), outage_features, earthquake_features = run_parallel_fetches()
+                    ((weather_features, source_name, fetch_debug), 
+                     outage_features, earthquake_features, wildfire_features) = run_parallel_fetches()
 
-                    # stores fetch timestamp
                     st.session_state.fetch_timestamp = datetime.now()
-                    
-                    # to store NWS source-reported update time if available
-                    if fetch_debug.get('nws_updated_parsed'):
-                        st.session_state.nws_source_updated = fetch_debug['nws_updated_parsed']
-                    else:
-                        st.session_state.nws_source_updated = None
+                    st.session_state.nws_source_updated = fetch_debug.get('nws_updated_parsed')
                 
-                with st.spinner(f"🔍 Analyzing against {len(weather_features)} weather alerts, {len(outage_features)} outage zones, and {len(earthquake_features)} recent quakes..."):
+                with st.spinner(f"🔍 Analyzing against {len(weather_features)} weather alerts, {len(outage_features)} outages, {len(earthquake_features)} quakes, {len(wildfire_features)} fires..."):
                     df_final = run_impact_analysis(
                         df_geo, 
                         weather_features, 
                         outage_features,
                         earthquake_features=earthquake_features,
+                        wildfire_features=wildfire_features,
                         enable_point_fallback=st.session_state.enable_fallback,
                         min_severity_rank=st.session_state.min_severity_rank,
                         exclude_low_priority=st.session_state.exclude_low_priority
@@ -933,6 +924,7 @@ with tab_impact:
                 st.session_state.fetch_debug = fetch_debug
                 st.session_state.outage_data = outage_features
                 st.session_state.earthquake_data = earthquake_features
+                st.session_state.wildfire_data = wildfire_features
                 
                 st.success("Analysis complete!")
             else:
@@ -944,6 +936,7 @@ with tab_impact:
         df_final = st.session_state.analysis_results
         weather_features = st.session_state.weather_data or []
         outage_features = st.session_state.outage_data or []
+        wildfire_features = st.session_state.get('wildfire_data', [])
         geom_stats = st.session_state.geom_stats
 
         # --- Metrics Row ---
@@ -961,89 +954,63 @@ with tab_impact:
         total_feats = geom_stats.get('total_features', 0)
         col4.metric("Valid Polygons", f"{valid_polys}/{total_feats}")
 
-        # Data Freshness Metric
         age_str, freshness_icon, is_stale = get_freshness_info(st.session_state.fetch_timestamp)
         col5.metric(f"{freshness_icon} Data Freshness", age_str)
 
-        # --- Quick Context Caption ---
         st.caption(
             "**Metrics:** Clients at Risk = IPs in active alert/outage zones · "
             "Valid Polygons = mappable alert boundaries (0 is OK if Point-API fallback is enabled)"
         )
 
-        # --- Detailed Help Expander ---
         with st.expander("ℹ️ What do these metrics mean?"):
             st.markdown("""
 | Metric | Description |
 | :--- | :--- |
-| **Total Clients** | Count of unique IP addresses that were successfully geolocated. IPs that couldn't be located (private ranges, invalid) are excluded from analysis. |
-| **Clients at Risk** | Locations that fall within an active weather alert polygon OR a power outage zone. The red delta shows how many are affected. |
-| **Weather Source** | Where alert data was fetched from. **IEM** = Iowa Environmental Mesonet (real-time storm polygons). **NWS** = National Weather Service (official alerts, often zone-based). **Merged** = both sources combined for maximum coverage. |
-| **Valid Polygons** | How many alerts have geographic boundaries that can be mapped. A low number (or 0) is common — many NWS alerts use "zones" instead of precise shapes. When this is low, the Point-API Fallback queries each IP's location directly against NWS. |
-| **Data Freshness** | Time since alert data was fetched. Color code: 🟢 Fresh (<10 min) · 🟡 Recent (10-15 min) · 🟠 Aging (15-30 min) · 🔴 Stale (>30 min). Weather changes fast — refresh if stale! |
+| **Total Clients** | Count of unique IP addresses that were successfully geolocated. |
+| **Clients at Risk** | Locations that fall within an active weather alert, outage, quake, or wildfire zone. |
+| **Weather Source** | Where alert data was fetched from. |
+| **Valid Polygons** | How many alerts have geographic boundaries that can be mapped. |
+| **Data Freshness** | Time since alert data was fetched. |
             """)
 
-        # --- Freshness Details Row ---
         if st.session_state.fetch_timestamp:
             fetch_time_str = st.session_state.fetch_timestamp.strftime('%I:%M:%S %p')
             nws_updated_str = st.session_state.nws_source_updated or "N/A"
             st.caption(f"🕐 **Fetched at:** {fetch_time_str} local | **NWS Source Updated:** {nws_updated_str}")
 
-        # --- Staleness Warning ---
         if is_stale:
-            st.warning(
-                f"⏰ **Data may be stale** — Last fetched {age_str}. "
-                "Weather conditions can change rapidly. Consider clicking **🔄 Run Spatial Analysis** to refresh with current data.",
-                icon="⚠️"
-            )
+            st.warning(f"⏰ **Data may be stale** — Last fetched {age_str}.", icon="⚠️")
 
-        # Info banner about merged sources
         if "Merged" in st.session_state.weather_source:
-            st.info("ℹ️ **Multi-Source Mode**: Data merged from IEM + NWS to maximize alert coverage (erring on caution).")
+            st.info("ℹ️ **Multi-Source Mode**: Data merged from IEM + NWS.")
 
-        # Warning banner if using fallback
         if st.session_state.using_point_fallback:
-            st.warning("⚠️ **Point-API Fallback Active**: Most weather alerts lack polygon geometry. "
-                       "Using direct NWS point queries for each IP location.")
+            st.warning("⚠️ **Point-API Fallback Active**: Most weather alerts lack polygon geometry. Using direct NWS point queries.")
 
-        # --- Strategic Impact Assessment (Service Provider Context) ---
+        # --- Strategic Impact Assessment ---
         st.subheader("🧠 Strategic Impact Assessment")
         
-        # Calculate counts based on risk details
         weather_confinement_count = 0
         probable_offline_count = 0
 
         for _, row in df_final.iterrows():
             if row['is_at_risk']:
                 details = str(row.get('risk_details', ''))
-                # If explicit power outage mentioned, they are likely offline
-                if "Power Outage" in details:
+                if "Power Outage" in details or "Earthquake" in details:
                     probable_offline_count += 1
                 else:
-                    # If risk is present but NO power outage, assume weather confinement (high load)
                     weather_confinement_count += 1
 
         with st.container(border=True):
             st.markdown("""
-            **Service Provider Context:** Severe weather typically increases online traffic (users confined indoors/working remotely), 
-            while power outages cause immediate traffic drops from affected regions.
+            **Service Provider Context:** Severe weather typically increases online traffic, 
+            while power outages and earthquakes cause immediate traffic drops.
             """)
-            
             c1, c2 = st.columns(2)
-            
-            c1.metric(
-                "📈 Potential Usage Spike (High Load)", 
-                f"{weather_confinement_count} Clients",
-                help="Clients in active weather alert zones but WITH power. Likely 'sheltering in place', increasing network demand."
-            )
-            
-            c2.metric(
-                "📉 Probable Traffic Drop (Offline)", 
-                f"{probable_offline_count} Clients",
-                help="Clients in confirmed power outage zones. Likely offline."
-            )
+            c1.metric("📈 Potential Usage Spike (High Load)", f"{weather_confinement_count} Clients")
+            c2.metric("📉 Probable Traffic Drop (Offline)", f"{probable_offline_count} Clients")
 
-        # --- Map ---
+        # --- Map with Layer Controls ---
         st.subheader("Interactive Threat Map")
         
         if not df_final.empty and pd.notnull(df_final.iloc[0].get('lat')):
@@ -1054,55 +1021,50 @@ with tab_impact:
             
         m = folium.Map(location=[center_lat, center_lon], zoom_start=4, tiles='CartoDB positron')
         
-        # Layer: Power Outages (black)
+        # Create FeatureGroups for Layer Control
+        fg_outages = folium.FeatureGroup(name="Power Outages", show=True)
+        fg_weather = folium.FeatureGroup(name="Weather Alerts", show=True)
+        fg_fires = folium.FeatureGroup(name="Wildfires", show=True)
+        fg_clients = folium.FeatureGroup(name="Clients (IPs)", show=True)
+
+        # Layer: Power Outages
         for feat in outage_features:
             try:
                 style = lambda x: {'fillColor': '#111111', 'color': 'black', 'fillOpacity': 0.5, 'weight': 1}
                 props = feat.get('properties', {})
                 tooltip = f"Outage: {props.get('NAME', 'Unknown')} - {props.get('Percent_Out', '?')}%"
-                folium.GeoJson(feat, style_function=style, tooltip=tooltip).add_to(m)
-            except:
-                continue
-                
-        # Layer: Weather Polygons (color-coded by type)
+                folium.GeoJson(feat, style_function=style, tooltip=tooltip).add_to(fg_outages)
+            except: continue
+        
+        # Layer: Wildfires
+        for feat in wildfire_features:
+            try:
+                style = lambda x: {'fillColor': '#FF4500', 'color': '#8B0000', 'fillOpacity': 0.6, 'weight': 2}
+                props = feat.get('properties', {})
+                tooltip = f"🔥 {props.get('poly_IncidentName', 'Fire')} ({props.get('poly_Acres', 0):,.0f} acres)"
+                folium.GeoJson(feat, style_function=style, tooltip=tooltip).add_to(fg_fires)
+            except: continue
+
+        # Layer: Weather Polygons
         for feat in weather_features:
             geom = feat.get('geometry')
-            if not geom or not geom.get('coordinates'):
-                continue  # Skip null geometry features for map display
-                
+            if not geom or not geom.get('coordinates'): continue
             props = feat.get('properties', {})
             desc = str(props).lower()
             
-            # Default styling
-            color = '#808080'
-            opacity = 0.3
-            
-            # Color by alert type
-            if 'tornado' in desc or "'to'" in desc:
-                color, opacity = '#FF0000', 0.7  # Red
-            elif 'thunderstorm' in desc or 'severe' in desc or "'sv'" in desc:
-                color, opacity = '#FFA500', 0.5  # Orange
-            elif 'flood' in desc or "'ff'" in desc or "'fl'" in desc:
-                color, opacity = '#228B22', 0.5  # Green
-            elif 'winter' in desc or 'snow' in desc or 'ice' in desc or 'blizzard' in desc or "'ws'" in desc or "'ww'" in desc:
-                color, opacity = '#1E90FF', 0.5  # Blue
-            elif 'cold' in desc or 'freeze' in desc or 'frost' in desc or 'wind chill' in desc:
-                color, opacity = '#00CED1', 0.4  # Cyan
-            elif 'heat' in desc or 'excessive' in desc:
-                color, opacity = '#FF4500', 0.5  # OrangeRed
-            elif 'wind' in desc or 'gale' in desc:
-                color, opacity = '#9370DB', 0.4  # Purple
-            elif 'fire' in desc or 'red flag' in desc:
-                color, opacity = '#DC143C', 0.6  # Crimson
-            elif 'marine' in desc or 'coastal' in desc:
-                color, opacity = '#00FFFF', 0.3  # Aqua
+            color, opacity = '#808080', 0.3
+            if 'tornado' in desc or "'to'" in desc: color, opacity = '#FF0000', 0.7
+            elif 'thunderstorm' in desc or 'severe' in desc: color, opacity = '#FFA500', 0.5
+            elif 'flood' in desc: color, opacity = '#228B22', 0.5
+            elif 'winter' in desc or 'snow' in desc: color, opacity = '#1E90FF', 0.5
+            elif 'heat' in desc: color, opacity = '#FF4500', 0.5
+            elif 'wind' in desc: color, opacity = '#9370DB', 0.4
             
             try:
                 style = lambda x, c=color, o=opacity: {'fillColor': c, 'color': c, 'fillOpacity': o, 'weight': 1}
                 tooltip = props.get('event') or props.get('prod_type') or 'Weather Alert'
-                folium.GeoJson(feat, style_function=style, tooltip=tooltip).add_to(m)
-            except:
-                continue
+                folium.GeoJson(feat, style_function=style, tooltip=tooltip).add_to(fg_weather)
+            except: continue
                 
         # Layer: IP Markers
         for _, row in df_final.iterrows():
@@ -1110,76 +1072,60 @@ with tab_impact:
                 is_risk = row.get('is_at_risk', False)
                 color = 'red' if is_risk else 'green'
                 icon = 'exclamation-triangle' if is_risk else 'check'
-                
-                popup_html = f"""
-                <b>IP:</b> {row.get('ip', 'N/A')}<br>
-                <b>Location:</b> {row.get('city', 'N/A')}, {row.get('region', 'N/A')}<br>
-                <b>Status:</b> {'⚠️ AT RISK' if is_risk else '✅ Clear'}<br>
-                <b>Details:</b> {row.get('risk_details', 'None')}
-                """
+                popup_html = f"<b>IP:</b> {row.get('ip')}<br><b>Status:</b> {'⚠️ AT RISK' if is_risk else '✅ Clear'}<br><b>Details:</b> {row.get('risk_details')}"
                 
                 folium.Marker(
                     [row['lat'], row['lon']], 
                     popup=folium.Popup(popup_html, max_width=300),
                     icon=folium.Icon(color=color, icon=icon, prefix='fa')
-                ).add_to(m)
+                ).add_to(fg_clients)
+
+        # Add all layers to map
+        fg_outages.add_to(m)
+        fg_weather.add_to(m)
+        fg_fires.add_to(m)
+        fg_clients.add_to(m)
+        
+        # Add Layer Control
+        folium.LayerControl().add_to(m)
 
         st_folium(m, width="100%", height=700, returned_objects=[])
 
-        # --- Data Table ---
+        # --- Data Table & Export ---
         st.subheader("Analysis Results")
         
-        # Create a clean display dataframe with status emoji
         df_display = df_final.copy()
-        df_display['Status'] = df_display['is_at_risk'].apply(
-            lambda x: '🔴 AT RISK' if x else '🟢 Clear'
-        )
-        
-        # Reorder columns for clarity
+        df_display['Status'] = df_display['is_at_risk'].apply(lambda x: '🔴 AT RISK' if x else '🟢 Clear')
         display_cols = ['Status', 'ip', 'city', 'region', 'risk_details']
-        if 'check_method' in df_display.columns:
-            display_cols.append('check_method')
+        if 'check_method' in df_display.columns: display_cols.append('check_method')
         
-        # Filter out the boolean column since we have Status now
-        st.dataframe(
-            df_display[display_cols],
-            use_container_width=True,
-            hide_index=True
+        st.dataframe(df_display[display_cols], use_container_width=True, hide_index=True)
+
+        # CSV Download Button
+        csv = df_final.to_csv(index=False)
+        st.download_button(
+            label="📥 Download Analysis Results (CSV)",
+            data=csv,
+            file_name=f"impact_analysis_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+            mime="text/csv"
         )
         
-        # Summary counts
         at_risk_df = df_final[df_final['is_at_risk'] == True]
         if not at_risk_df.empty:
-            st.caption(f"⚠️ {len(at_risk_df)} of {len(df_final)} locations have active weather alerts meeting your threshold.")
+            st.caption(f"⚠️ {len(at_risk_df)} of {len(df_final)} locations have active risks.")
 
         # --- Debug Expander ---
         with st.expander("🔧 Debug Information"):
             col_a, col_b, col_c = st.columns(3)
-            
             with col_a:
                 st.subheader("Fetch Statistics")
                 st.json(st.session_state.fetch_debug)
-            
             with col_b:
                 st.subheader("Geometry Stats")
                 st.json(st.session_state.geom_stats)
-            
             with col_c:
                 st.subheader("Filter Stats")
                 st.json(st.session_state.get('filter_stats', {}))
-            
-            if geom_stats.get('null_geometry', 0) > 0:
-                null_pct = (geom_stats['null_geometry'] / geom_stats['total_features']) * 100 if geom_stats['total_features'] > 0 else 0
-                st.warning(f"⚠️ {null_pct:.1f}% of weather features have NULL geometry. "
-                           "This is typical for NWS zone-based alerts. Point-API fallback recommended.")
-            
-            st.subheader("Sample Feature (Raw)")
-            if weather_features:
-                sample = weather_features[0]
-                st.write("**Geometry Present:**", sample.get('geometry') is not None)
-                st.write("**Geometry Type:**", sample.get('geometry', {}).get('type') if sample.get('geometry') else "NULL")
-                st.write("**Properties:**")
-                st.json(sample.get('properties', {}))
     else:
         st.info("👈 Enter IP addresses in the sidebar and click **Run Spatial Analysis** to begin.")
 
