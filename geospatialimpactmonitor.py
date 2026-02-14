@@ -798,10 +798,14 @@ def rerun_analysis_with_filters():
     if (st.session_state.geo_data is not None and
         st.session_state.weather_data is not None):
 
+        # Safely retrieve earthquake data or use empty list
+        quakes = st.session_state.get('earthquake_data', [])
+
         df_final = run_impact_analysis(
             st.session_state.geo_data,
             st.session_state.weather_data,
             st.session_state.outage_data,
+            earthquake_features=quakes,
             enable_point_fallback=st.session_state.enable_fallback,
             min_severity_rank=st.session_state.min_severity_rank,
             exclude_low_priority=st.session_state.exclude_low_priority
