@@ -508,7 +508,7 @@ def run_impact_analysis(df_ips, weather_features, outage_features, earthquake_fe
             except:
                 continue
 
-    # --- Build Earthquake Zone List (New) ---
+    # --- Build Earthquake Zone List ---
     earthquake_polys = []
     for feature in earthquake_features:
         geom = feature.get('geometry')
@@ -517,9 +517,7 @@ def run_impact_analysis(df_ips, weather_features, outage_features, earthquake_fe
             try:
                 # Geometry from USGS is a Point
                 quake_point = shape(geom)
-                # Create a "Impact Buffer" zone
-                # 0.5 degrees is roughly 35 miles / 55 km radius
-                # This approximates a "felt/impact" zone for moderate quakes
+                # Create a "Impact Buffer" zone (0.5 degrees approx 35 miles)
                 impact_zone = quake_point.buffer(0.5) 
                 
                 mag = props.get('mag', 0)
@@ -542,7 +540,6 @@ def run_impact_analysis(df_ips, weather_features, outage_features, earthquake_fe
     st.session_state.using_point_fallback = use_point_fallback
 
     # --- Optimization: Build Spatial Indices ---
-    # We extract the pure geometry objects to build the search trees
     weather_geoms = [item['poly'] for item in weather_polys]
     weather_tree = STRtree(weather_geoms) if weather_geoms else None
     
@@ -560,15 +557,11 @@ def run_impact_analysis(df_ips, weather_features, outage_features, earthquake_fe
         
         if pd.notnull(row.get('lat')) and pd.notnull(row.get('lon')):
             point = Point(row['lon'], row['lat'])
-            # Create a small buffer once for edge-case checks
             point_buffer = point.buffer(0.001) 
             
-            # Method 1: Check against weather polygons (Optimized)
+            # Method 1: Check against weather polygons
             if weather_tree:
-                # 1. Ask the tree for indices of polygons that might intersect our point
                 candidate_indices = weather_tree.query(point)
-                
-                # 2. Check only the candidates
                 for idx in candidate_indices:
                     try:
                         alert = weather_polys[idx]
@@ -578,7 +571,7 @@ def run_impact_analysis(df_ips, weather_features, outage_features, earthquake_fe
                     except:
                         continue
             
-            # Method 2: Check against outage polygons (Optimized)
+            # Method 2: Check against outage polygons
             if outage_tree:
                 candidate_indices = outage_tree.query(point)
                 for idx in candidate_indices:
@@ -590,7 +583,7 @@ def run_impact_analysis(df_ips, weather_features, outage_features, earthquake_fe
                     except:
                         continue
             
-            # Method 3: Check against Earthquake zones (New)
+            # Method 3: Check against Earthquake zones
             if earthquake_tree:
                 candidate_indices = earthquake_tree.query(point)
                 for idx in candidate_indices:
@@ -602,7 +595,7 @@ def run_impact_analysis(df_ips, weather_features, outage_features, earthquake_fe
                     except:
                         continue
 
-            # Method 4: FALLBACK - Direct NWS point query when polygon data is insufficient
+            # Method 4: FALLBACK - Direct NWS point query
             if use_point_fallback and not is_at_risk:
                 point_alerts = check_point_alerts_nws(
                     row['lat'], row['lon'], 
@@ -613,7 +606,6 @@ def run_impact_analysis(df_ips, weather_features, outage_features, earthquake_fe
                     is_at_risk = True
                     hazards.extend(point_alerts)
                     check_method = "point-api"
-                # Rate limit for API calls
                 time.sleep(0.2)
                     
         results.append({
@@ -628,7 +620,6 @@ def run_impact_analysis(df_ips, weather_features, outage_features, earthquake_fe
         })
         
     return pd.DataFrame(results)
-# --- FRESHNESS HELPER ---
 
 def get_freshness_info(fetch_timestamp):
     """
