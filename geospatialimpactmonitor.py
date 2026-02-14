@@ -278,6 +278,21 @@ def fetch_power_outages():
 
     return all_features
 
+def fetch_earthquakes():
+    """
+    Fetches USGS Earthquake data (Mag 2.5+ in last 24 hours).
+    Returns GeoJSON features.
+    """
+    # USGS Feed: Magnitude 2.5+ earthquakes, past day
+    url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.geojson"
+    try:
+        r = requests.get(url, timeout=5)
+        if r.status_code == 200:
+            return r.json().get('features', [])
+    except:
+        pass
+    return []
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_geolocation_bulk(ip_list):
     """
