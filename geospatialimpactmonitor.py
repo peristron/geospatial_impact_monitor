@@ -473,6 +473,14 @@ def run_impact_analysis(df_ips, weather_features, outage_features,
 
     st.session_state.using_point_fallback = use_point_fallback
 
+    # --- Optimization: Build Spatial Indices ---
+    # We extract the pure geometry objects to build the search trees
+    weather_geoms = [item['poly'] for item in weather_polys]
+    weather_tree = STRtree(weather_geoms) if weather_geoms else None
+    
+    outage_geoms = [item['poly'] for item in outage_polys]
+    outage_tree = STRtree(outage_geoms) if outage_geoms else None
+
     # --- Analyze Each IP Location ---
     for index, row in df_ips.iterrows():
         hazards = []
@@ -481,25 +489,37 @@ def run_impact_analysis(df_ips, weather_features, outage_features,
         
         if pd.notnull(row.get('lat')) and pd.notnull(row.get('lon')):
             point = Point(row['lon'], row['lat'])
+            # Create a small buffer once for edge-case checks
+            point_buffer = point.buffer(0.001) 
             
-            # Method 1: Check against weather polygons
-            for alert in weather_polys:
-                try:
-                    # Use both contains and small buffer intersection for edge cases
-                    if alert['poly'].contains(point) or alert['poly'].intersects(point.buffer(0.001)):
-                        is_at_risk = True
-                        hazards.append(alert['desc'])
-                except:
-                    continue
+            # Method 1: Check against weather polygons (Optimized)
+            if weather_tree:
+                # 1. Ask the tree for indices of polygons that might intersect our point
+                #    (This filters 500 active alerts down to usually 0, 1, or 2 candidates instantly)
+                candidate_indices = weather_tree.query(point)
+                
+                # 2. Check only the candidates
+                for idx in candidate_indices:
+                    try:
+                        alert = weather_polys[idx]
+                        # Exact check
+                        if alert['poly'].contains(point) or alert['poly'].intersects(point_buffer):
+                            is_at_risk = True
+                            hazards.append(alert['desc'])
+                    except:
+                        continue
             
-            # Method 2: Check against outage polygons
-            for outage in outage_polys:
-                try:
-                    if outage['poly'].contains(point):
-                        is_at_risk = True
-                        hazards.append(outage['desc'])
-                except:
-                    continue
+            # Method 2: Check against outage polygons (Optimized)
+            if outage_tree:
+                candidate_indices = outage_tree.query(point)
+                for idx in candidate_indices:
+                    try:
+                        outage = outage_polys[idx]
+                        if outage['poly'].contains(point):
+                            is_at_risk = True
+                            hazards.append(outage['desc'])
+                    except:
+                        continue
             
             # Method 3: FALLBACK - Direct NWS point query when polygon data is insufficient
             if use_point_fallback and not is_at_risk:
