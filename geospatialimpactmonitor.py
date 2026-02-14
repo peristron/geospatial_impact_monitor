@@ -294,6 +294,27 @@ def fetch_earthquakes():
         pass
     return []
 
+@st.cache_data(ttl=3600)
+def fetch_wildfires():
+    """
+    Fetches current large wildfire perimeters (>500 acres) from NIFC.
+    Source: National Interagency Fire Center (WFIGS)
+    """
+    # WFIGS Current Interagency Perimeters
+    url = "https://services3.arcgis.com/T4QMspueLg7OBLS4/arcgis/rest/services/WFIGS_Interagency_Perimeters/FeatureServer/0/query"
+    params = {
+        'where': 'poly_Acres > 500',
+        'outFields': 'poly_IncidentName,poly_Acres,attr_UniqueFireIdentifier',
+        'f': 'geojson'
+    }
+    try:
+        r = requests.get(url, params=params, timeout=10)
+        if r.status_code == 200:
+            return r.json().get('features', [])
+    except:
+        pass
+    return []
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_geolocation_bulk(ip_list):
     """
