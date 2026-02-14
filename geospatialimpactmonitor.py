@@ -754,7 +754,7 @@ if 'global_mapper_projection' not in st.session_state:
 st.title("🌍 Geospatial Tools Suite")
 
 # --- MODE SELECTION TABS ---
-tab_impact, tab_mapper = st.tabs(["🌩️ Impact Monitor (US Weather/Outages)", "🗺️ Global Location Mapper"])
+tab_impact, tab_mapper = st.tabs(["🌩️ Impact Monitor (Multi-Hazard)", "🗺️ Global Location Mapper"])
 
 # --- CALLBACK FUNCTION FOR FILTER CHANGES ---
 
@@ -783,8 +783,7 @@ def rerun_analysis_with_filters():
 # ============================================================================
 
 with tab_impact:
-    st.markdown("**How it works:** Enter IP addresses (from clients, users, or devices) to assess risks from active weather alerts and power outages. The app geolocates each IP, then checks against ~real-time data from NOAA and other sources using zone intersections and targeted queries for accurate impact detection. The engine 'errs on the side of caution', so if 1 datasource shows a severe alert, and another related datasource shows moderate, the app shows 'severe'.")
-
+    st.markdown("**How it works:** Enter IP addresses (from clients, users, or devices) to assess risks from active **weather alerts, power outages, earthquakes, and wildfires**. The app geolocates each IP, then checks against ~real-time data from **NOAA, USGS, NIFC, and utility providers** using zone intersections and targeted queries for accurate impact detection. The engine 'errs on the side of caution' to prioritize safety.")
     with st.sidebar:
         st.header("🌩️ Impact Monitor Controls")
         st.caption("Settings for the **Impact Monitor** tab")
