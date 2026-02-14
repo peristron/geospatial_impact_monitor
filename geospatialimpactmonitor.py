@@ -1384,12 +1384,15 @@ with tab_mapper:
                 if mapper_input_type == "IP Addresses":
                     ip_list = [ip.strip() for ip in mapper_ip_input.split('\n') if ip.strip()]
                     if ip_list:
-                        mapper_locations = get_geolocation_bulk(ip_list)
-                        # Add label column based on city/country
-                        mapper_locations['label'] = mapper_locations.apply(
-                            lambda r: f"{r['city']}, {r['countryCode']}" if r['city'] != 'N/A' else r['ip'],
-                            axis=1
-                        )
+                        # Use cached function and copy result to avoid mutation warnings
+                        raw_data = get_geolocation_bulk(ip_list)
+                        mapper_locations = raw_data.copy() if not raw_data.empty else raw_data
+                        
+                        if not mapper_locations.empty:
+                            mapper_locations['label'] = mapper_locations.apply(
+                                lambda r: f"{r['city']}, {r['countryCode']}" if r['city'] != 'N/A' else r['ip'],
+                                axis=1
+                            )
                         
                 elif mapper_input_type == "Coordinates":
                     mapper_locations = parse_coordinates_input(mapper_coord_input)
@@ -1402,68 +1405,63 @@ with tab_mapper:
                             else:
                                 df = pd.read_excel(mapper_file)
                             
-                            # Check for coordinate columns
-                            lat_col = None
-                            lon_col = None
-                            ip_col = None
-                            
-                            for col in df.columns:
-                                col_lower = col.lower()
-                                if 'lat' in col_lower:
-                                    lat_col = col
-                                elif 'lon' in col_lower or 'lng' in col_lower:
-                                    lon_col = col
-                                elif 'ip' in col_lower:
-                                    ip_col = col
+                            # Normalize columns
+                            cols = {c.lower(): c for c in df.columns}
+                            lat_col = next((cols[c] for c in cols if 'lat' in c), None)
+                            lon_col = next((cols[c] for c in cols if 'lon' in c or 'lng' in c), None)
+                            ip_col = next((cols[c] for c in cols if 'ip' in c), None)
                             
                             if lat_col and lon_col:
-                                mapper_locations = df[[lat_col, lon_col]].copy()
-                                mapper_locations.columns = ['lat', 'lon']
-                                if 'label' in df.columns or 'name' in df.columns:
-                                    label_col = 'label' if 'label' in df.columns else 'name'
-                                    mapper_locations['label'] = df[label_col]
-                                else:
-                                    mapper_locations['label'] = [f"Point {i+1}" for i in range(len(mapper_locations))]
+                                mapper_locations = df.rename(columns={lat_col: 'lat', lon_col: 'lon'})
+                                if 'label' not in mapper_locations.columns:
+                                    name_col = next((cols[c] for c in cols if 'name' in c), None)
+                                    if name_col:
+                                        mapper_locations['label'] = mapper_locations[name_col]
+                                    else:
+                                        mapper_locations['label'] = [f"Point {i+1}" for i in range(len(mapper_locations))]
                             elif ip_col:
                                 ip_list = df[ip_col].astype(str).tolist()
-                                mapper_locations = get_geolocation_bulk(ip_list)
-                                mapper_locations['label'] = mapper_locations.apply(
-                                    lambda r: f"{r['city']}, {r['countryCode']}" if r['city'] != 'N/A' else r['ip'],
-                                    axis=1
-                                )
-                            else:
-                                st.error("Could not find lat/lon or IP columns in file")
+                                raw_data = get_geolocation_bulk(ip_list)
+                                mapper_locations = raw_data.copy() if not raw_data.empty else raw_data
+                                if not mapper_locations.empty:
+                                    mapper_locations['label'] = mapper_locations.apply(
+                                        lambda r: f"{r['city']}, {r['countryCode']}" if r['city'] != 'N/A' else r['ip'],
+                                        axis=1
+                                    )
                         except Exception as e:
                             st.error(f"Error reading file: {e}")
                 
-                # Filter out rows with missing coordinates
-                if not mapper_locations.empty:
+                # Filter valid
+                if not mapper_locations.empty and 'lat' in mapper_locations.columns:
                     mapper_locations = mapper_locations.dropna(subset=['lat', 'lon'])
                 
+                # Update Session State
                 st.session_state.global_mapper_data = mapper_locations
                 st.session_state.global_mapper_projection = selected_projection
-    
+
     # --- Display Global Map ---
+    # Use Session State data AND Session State projection (ensures map matches the button click)
     if st.session_state.global_mapper_data is not None and not st.session_state.global_mapper_data.empty:
         df_map = st.session_state.global_mapper_data
+        # Use the projection saved in session state (from the button click), NOT the widget
+        current_proj = st.session_state.global_mapper_projection
         
         # Metrics
         col1, col2, col3 = st.columns(3)
         col1.metric("Total Locations", len(df_map))
         
-        if 'country' in df_map.columns:
-            unique_countries = df_map['country'].nunique()
-            col2.metric("Countries", unique_countries)
-        elif 'countryCode' in df_map.columns:
-            unique_countries = df_map['countryCode'].nunique()
-            col2.metric("Countries", unique_countries)
+        country_col = 'country' if 'country' in df_map.columns else 'countryCode'
+        if country_col in df_map.columns:
+            col2.metric("Countries", df_map[country_col].nunique())
         
-        col3.metric("Projection", selected_projection_name)
+        # Display the projection name based on the value in session state
+        proj_name = next((k for k, v in PROJECTION_OPTIONS.items() if v == current_proj), "Unknown")
+        col3.metric("Projection", proj_name)
         
         # Create and display the map
         fig = create_global_map(
             df_map,
-            projection=selected_projection,
+            projection=current_proj, # <--- KEY FIX: Uses session state, not widget
             marker_size=marker_size,
             marker_color=marker_color,
             show_labels=show_labels,
@@ -1474,104 +1472,15 @@ with tab_mapper:
         
         # Data table
         st.subheader("📍 Location Data")
+        display_cols = [c for c in ['label', 'ip', 'lat', 'lon', 'city', 'region', 'country', 'countryCode', 'isp'] if c in df_map.columns]
+        st.dataframe(df_map[display_cols], use_container_width=True, hide_index=True)
         
-        # Prepare display columns
-        display_cols = ['label'] if 'label' in df_map.columns else []
-        if 'ip' in df_map.columns:
-            display_cols.append('ip')
-        display_cols.extend(['lat', 'lon'])
-        if 'city' in df_map.columns:
-            display_cols.append('city')
-        if 'region' in df_map.columns:
-            display_cols.append('region')
-        if 'country' in df_map.columns:
-            display_cols.append('country')
-        elif 'countryCode' in df_map.columns:
-            display_cols.append('countryCode')
-        if 'isp' in df_map.columns:
-            display_cols.append('isp')
-        
-        # Filter to existing columns
-        display_cols = [c for c in display_cols if c in df_map.columns]
-        
-        st.dataframe(
-            df_map[display_cols],
-            use_container_width=True,
-            hide_index=True
-        )
-        
-        # Export option
-        csv = df_map.to_csv(index=False)
+        # Export
         st.download_button(
-            label="📥 Download as CSV",
-            data=csv,
-            file_name="geolocations.csv",
-            mime="text/csv"
+            "📥 Download as CSV",
+            df_map.to_csv(index=False),
+            "geolocations.csv",
+            "text/csv"
         )
-        
-        # Projection comparison expander
-        with st.expander("🔍 Compare Projections"):
-            st.markdown("See how different projections display the same data:")
-            
-            comparison_projections = ['mercator', 'orthographic', 'robinson', 'mollweide']
-            cols = st.columns(2)
-            
-            for idx, proj in enumerate(comparison_projections):
-                with cols[idx % 2]:
-                    st.markdown(f"**{proj.title()}**")
-                    compare_fig = create_global_map(
-                        df_map,
-                        projection=proj,
-                        marker_size=8,
-                        marker_color=marker_color,
-                        show_labels=False,
-                        globe_rotation=dict(lon=0, lat=20) if proj == 'orthographic' else None
-                    )
-                    compare_fig.update_layout(height=300, margin=dict(l=0, r=0, t=0, b=0))
-                    st.plotly_chart(compare_fig, use_container_width=True, key=f"compare_{proj}")
-    
     else:
         st.info("👈 Enter locations in the sidebar and click **Generate Map** to visualize.")
-        
-        # Show projection examples
-
-        with st.expander("🌐 About Map Projections"):
-            st.markdown("""
-            **Map projections** transform the 3D Earth onto a 2D surface. Each projection makes trade-offs:
-            
-            ### Compromise Projections
-            | Projection | Best For | Notes |
-            |------------|----------|-------|
-            | **Natural Earth** | General world maps | Balanced, visually pleasing |
-            | **Robinson** | Thematic world maps | Slight distortion everywhere |
-            | **Winkel Tripel** | Reference maps | Used by National Geographic |
-            
-            ### Azimuthal Projections (centered on a point)
-            | Projection | Best For | Key Property |
-            |------------|----------|--------------|
-            | **Orthographic** | Visual appeal, presentations | Looks like a globe from space |
-            | **Azimuthal Equidistant** | Range/distance maps | Distances from center are accurate |
-            | **Azimuthal Equal Area** | Distribution from a point | Areas are accurate |
-            | **Gnomonic** | Navigation, flight planning | Great circles are straight lines |
-            
-            ### Cylindrical Projections
-            | Projection | Best For | Key Property |
-            |------------|----------|--------------|
-            | **Mercator** | Navigation, web maps | Preserves angles, extreme polar distortion |
-            | **Transverse Mercator** | Narrow N-S regions, UTM | Very accurate in limited zones |
-            
-            ### Equal-Area Projections
-            | Projection | Best For | Key Property |
-            |------------|----------|--------------|
-            | **Mollweide** | Global distributions | Accurate area comparison |
-            | **Eckert IV** | Thematic maps | Rounded corners, pleasant shape |
-            
-            ### Conic Projections
-            | Projection | Best For | Key Property |
-            |------------|----------|--------------|
-            | **Conic Conformal** | Aeronautical charts | Preserves angles |
-            | **Albers USA** | US maps specifically | Alaska/Hawaii repositioned |
-            
-            ---
-            💡 **Tip:** For "distance from a location" analysis, use **Azimuthal Equidistant** centered on your point of interest!
-            """)
