@@ -1069,8 +1069,43 @@ with tab_impact:
         for _, row in df_final.iterrows():
             if pd.notnull(row.get('lat')):
                 is_risk = row.get('is_at_risk', False)
-                color = 'red' if is_risk else 'green'
-                icon = 'exclamation-triangle' if is_risk else 'check'
+                details = str(row.get('risk_details', '')).lower()
+                
+                # Default Safe State
+                color = 'green'
+                icon = 'check'
+                
+                # Dynamic Hazard Icons (Priority Order)
+                if is_risk:
+                    if 'wildfire' in details:
+                        color = 'darkred'
+                        icon = 'fire'
+                    elif 'power outage' in details:
+                        color = 'black'
+                        icon = 'plug'
+                    elif 'earthquake' in details:
+                        color = 'orange'
+                        icon = 'house-crack' # or 'activity'
+                    elif 'tornado' in details:
+                        color = 'red'
+                        icon = 'wind' 
+                    elif 'thunderstorm' in details or 'storm' in details:
+                        color = 'red'
+                        icon = 'cloud-bolt'
+                    elif 'flood' in details:
+                        color = 'blue'
+                        icon = 'water'
+                    elif 'winter' in details or 'snow' in details or 'ice' in details:
+                        color = 'blue'
+                        icon = 'snowflake'
+                    elif 'heat' in details:
+                        color = 'orange'
+                        icon = 'temperature-high'
+                    else:
+                        # Generic Warning
+                        color = 'red'
+                        icon = 'triangle-exclamation'
+
                 popup_html = f"<b>IP:</b> {row.get('ip')}<br><b>Status:</b> {'⚠️ AT RISK' if is_risk else '✅ Clear'}<br><b>Details:</b> {row.get('risk_details')}"
                 
                 folium.Marker(
