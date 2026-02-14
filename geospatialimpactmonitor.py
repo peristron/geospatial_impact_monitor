@@ -426,152 +426,98 @@ def parse_coordinates_input(raw_text):
 
 # --- ANALYSIS ---
 
-def run_impact_analysis(df_ips, weather_features, outage_features, earthquake_features=None,
+def run_impact_analysis(df_ips, weather_features, outage_features, earthquake_features=None, wildfire_features=None,
                         enable_point_fallback=True,
                         min_severity_rank=0,
                         exclude_low_priority=False):
     """
-    Performs spatial intersection analysis.
-    Includes point-based API fallback when polygon data is unavailable.
-    Filters alerts by severity threshold.
+    Performs spatial intersection analysis using STRtree.
+    Auto-detects Shapely version (2.0 returns indices, <2.0 returns geometries).
     """
     results = []
     weather_features = weather_features or []
     outage_features = outage_features or []
     earthquake_features = earthquake_features or []
+    wildfire_features = wildfire_features or []
 
-    # Track filter statistics
-    filter_stats = {'total_alerts': 0, 'passed_filter': 0, 'filtered_out': 0}
-
-    # Geometry processing statistics
-    geom_stats = {
-        'total_features': len(weather_features), 
-        'valid_polygons': 0, 
-        'null_geometry': 0, 
-        'parse_errors': 0
-    }
-
-    # --- Build Weather Polygon List ---
-    weather_polys = []
-    for feature in weather_features:
-        geom = feature.get('geometry')
-        props = feature.get('properties', {})
-        
-        # Check for null/missing geometry (common with NWS zone-based alerts)
-        if geom is None:
-            geom_stats['null_geometry'] += 1
-            continue
-        
-        # Check for empty coordinates
-        if not geom.get('type') or not geom.get('coordinates'):
-            geom_stats['null_geometry'] += 1
-            continue
-        
-        # Apply severity filter BEFORE geometry processing (efficiency)
-        filter_stats['total_alerts'] += 1
-        if not passes_severity_threshold(props, min_severity_rank, exclude_low_priority):
-            filter_stats['filtered_out'] += 1
-            continue
-        filter_stats['passed_filter'] += 1
+    # --- Helper: Prepare Features ---
+    def prepare_polys(features, type_label):
+        polys = []
+        valid_count = 0
+        for feature in features:
+            geom = feature.get('geometry')
+            props = feature.get('properties', {})
             
-        try:
-            poly = shape(geom)
-            
-            # Fix invalid geometries (self-intersections, etc.)
-            if not poly.is_valid:
-                poly = make_valid(poly)
-            
-            if poly.is_valid and not poly.is_empty:
-                # Handle both IEM (phenomena) and NWS (event) naming
-                event_name = (props.get('event') or 
-                              props.get('prod_type') or 
-                              props.get('phenomena', 'WX'))
-                severity = props.get('severity', 'Unknown')
-                urgency = props.get('urgency', '')
-                
-                # Include severity in description for clarity
-                if urgency and urgency != 'Unknown':
-                    desc_full = f"{event_name} ({severity}/{urgency})"
-                else:
-                    desc_full = f"{event_name} ({severity})"
-                
-                weather_polys.append({
-                    'poly': poly,
-                    'desc': desc_full,
-                    'severity': severity,
-                    'raw_props': props
-                })
-                geom_stats['valid_polygons'] += 1
-            else:
-                geom_stats['parse_errors'] += 1
-        except Exception:
-            geom_stats['parse_errors'] += 1
-            continue
+            if not geom or not geom.get('coordinates'):
+                continue
 
-    # Store stats in session state
-    st.session_state.filter_stats = filter_stats
-    st.session_state.geom_stats = geom_stats
+            # Severity Filtering for Weather
+            if type_label == 'weather':
+                if not passes_severity_threshold(props, min_severity_rank, exclude_low_priority):
+                    continue
 
-    # --- Build Outage Polygon List ---
-    outage_polys = []
-    for feature in outage_features:
-        geom = feature.get('geometry')
-        props = feature.get('properties', {})
-        if geom and geom.get('coordinates'):
             try:
                 poly = shape(geom)
                 if not poly.is_valid:
                     poly = make_valid(poly)
+                
+                # For Earthquakes, buffer the point to create a zone
+                if type_label == 'earthquake':
+                    poly = poly.buffer(0.5) # ~35 miles
+
                 if poly.is_valid and not poly.is_empty:
-                    outage_polys.append({
-                        'poly': poly,
-                        'desc': f"Power Outage: {props.get('Percent_Out', 'N/A')}% - {props.get('NAME', 'Unknown')}"
-                    })
+                    desc = "Unknown"
+                    if type_label == 'weather':
+                        event_name = (props.get('event') or props.get('prod_type') or props.get('phenomena', 'WX'))
+                        sev = props.get('severity', 'Unknown')
+                        urgency = props.get('urgency', '')
+                        desc = f"{event_name} ({sev}/{urgency})" if urgency else f"{event_name} ({sev})"
+                    elif type_label == 'outage':
+                        desc = f"Power Outage: {props.get('Percent_Out', 'N/A')}% - {props.get('NAME', 'Unknown')}"
+                    elif type_label == 'earthquake':
+                        mag = props.get('mag', 0)
+                        place = props.get('place', 'Unknown')
+                        time_str = datetime.fromtimestamp(props.get('time', 0)/1000).strftime('%Y-%m-%d %H:%M')
+                        desc = f"Earthquake M{mag} near {place} ({time_str})"
+                    elif type_label == 'wildfire':
+                        name = props.get('poly_IncidentName', 'Unnamed Fire')
+                        acres = props.get('poly_Acres', 0)
+                        desc = f"Wildfire: {name} ({acres:,.0f} acres)"
+
+                    polys.append({'poly': poly, 'desc': desc})
+                    valid_count += 1
             except:
                 continue
+        return polys, valid_count
 
-    # --- Build Earthquake Zone List ---
-    earthquake_polys = []
-    for feature in earthquake_features:
-        geom = feature.get('geometry')
-        props = feature.get('properties', {})
-        if geom and geom.get('coordinates'):
-            try:
-                # Geometry from USGS is a Point
-                quake_point = shape(geom)
-                # Create a "Impact Buffer" zone (0.5 degrees approx 35 miles)
-                impact_zone = quake_point.buffer(0.5) 
-                
-                mag = props.get('mag', 0)
-                place = props.get('place', 'Unknown location')
-                time_str = datetime.fromtimestamp(props.get('time', 0)/1000).strftime('%Y-%m-%d %H:%M')
-                
-                earthquake_polys.append({
-                    'poly': impact_zone,
-                    'desc': f"Earthquake M{mag} near {place} ({time_str})"
-                })
-            except:
-                continue
+    # --- Build Lists & Trees ---
+    weather_polys, w_count = prepare_polys(weather_features, 'weather')
+    outage_polys, o_count = prepare_polys(outage_features, 'outage')
+    earthquake_polys, e_count = prepare_polys(earthquake_features, 'earthquake')
+    wildfire_polys, f_count = prepare_polys(wildfire_features, 'wildfire')
 
-    # --- Determine if we need point-based fallback ---
-    # Use fallback if most features have null geometry
-    use_point_fallback = (enable_point_fallback and 
-                          geom_stats['valid_polygons'] < geom_stats['total_features'] * 0.1 and
-                          geom_stats['total_features'] > 0)
+    # Update Stats
+    st.session_state.geom_stats = {
+        'total_features': len(weather_features), 
+        'valid_polygons': w_count
+    }
 
+    # Build Trees
+    w_geoms = [p['poly'] for p in weather_polys]
+    o_geoms = [p['poly'] for p in outage_polys]
+    e_geoms = [p['poly'] for p in earthquake_polys]
+    f_geoms = [p['poly'] for p in wildfire_polys]
+    
+    weather_tree = STRtree(w_geoms) if w_geoms else None
+    outage_tree = STRtree(o_geoms) if o_geoms else None
+    earthquake_tree = STRtree(e_geoms) if e_geoms else None
+    wildfire_tree = STRtree(f_geoms) if f_geoms else None
+
+    # Determine Fallback
+    use_point_fallback = (enable_point_fallback and w_count < len(weather_features) * 0.1 and len(weather_features) > 0)
     st.session_state.using_point_fallback = use_point_fallback
 
-    # --- Optimization: Build Spatial Indices ---
-    weather_geoms = [item['poly'] for item in weather_polys]
-    weather_tree = STRtree(weather_geoms) if weather_geoms else None
-    
-    outage_geoms = [item['poly'] for item in outage_polys]
-    outage_tree = STRtree(outage_geoms) if outage_geoms else None
-    
-    earthquake_geoms = [item['poly'] for item in earthquake_polys]
-    earthquake_tree = STRtree(earthquake_geoms) if earthquake_geoms else None
-
-    # --- Analyze Each IP Location ---
+    # --- Analyze IPs ---
     for index, row in df_ips.iterrows():
         hazards = []
         is_at_risk = False
@@ -579,45 +525,42 @@ def run_impact_analysis(df_ips, weather_features, outage_features, earthquake_fe
         
         if pd.notnull(row.get('lat')) and pd.notnull(row.get('lon')):
             point = Point(row['lon'], row['lat'])
-            point_buffer = point.buffer(0.001) 
-            
-            # Method 1: Check against weather polygons
-            if weather_tree:
-                candidate_indices = weather_tree.query(point)
-                for idx in candidate_indices:
-                    try:
-                        alert = weather_polys[idx]
-                        if alert['poly'].contains(point) or alert['poly'].intersects(point_buffer):
-                            is_at_risk = True
-                            hazards.append(alert['desc'])
-                    except:
-                        continue
-            
-            # Method 2: Check against outage polygons
-            if outage_tree:
-                candidate_indices = outage_tree.query(point)
-                for idx in candidate_indices:
-                    try:
-                        outage = outage_polys[idx]
-                        if outage['poly'].contains(point):
-                            is_at_risk = True
-                            hazards.append(outage['desc'])
-                    except:
-                        continue
-            
-            # Method 3: Check against Earthquake zones
-            if earthquake_tree:
-                candidate_indices = earthquake_tree.query(point)
-                for idx in candidate_indices:
-                    try:
-                        quake = earthquake_polys[idx]
-                        if quake['poly'].contains(point):
-                            is_at_risk = True
-                            hazards.append(quake['desc'])
-                    except:
-                        continue
+            point_buffer = point.buffer(0.001)
 
-            # Method 4: FALLBACK - Direct NWS point query
+            # Helper to query tree safely
+            def query_tree(tree, source_polys):
+                found_hazards = []
+                if not tree: return []
+                result = tree.query(point)
+                
+                indices = []
+                if len(result) > 0:
+                    if isinstance(result[0], int) or (hasattr(result, 'dtype') and 'int' in str(result.dtype)):
+                        indices = result
+                    else:
+                        for geom in result:
+                            for item in source_polys:
+                                if item['poly'] == geom:
+                                    if item['poly'].contains(point) or item['poly'].intersects(point_buffer):
+                                        found_hazards.append(item['desc'])
+                        return found_hazards
+
+                for idx in indices:
+                    item = source_polys[idx]
+                    if item['poly'].contains(point) or item['poly'].intersects(point_buffer):
+                        found_hazards.append(item['desc'])
+                return found_hazards
+
+            # Run Checks
+            hazards.extend(query_tree(weather_tree, weather_polys))
+            hazards.extend(query_tree(outage_tree, outage_polys))
+            hazards.extend(query_tree(earthquake_tree, earthquake_polys))
+            hazards.extend(query_tree(wildfire_tree, wildfire_polys))
+
+            if hazards:
+                is_at_risk = True
+
+            # Fallback
             if use_point_fallback and not is_at_risk:
                 point_alerts = check_point_alerts_nws(
                     row['lat'], row['lon'], 
@@ -629,7 +572,7 @@ def run_impact_analysis(df_ips, weather_features, outage_features, earthquake_fe
                     hazards.extend(point_alerts)
                     check_method = "point-api"
                 time.sleep(0.2)
-                    
+
         results.append({
             'ip': row.get('ip'),
             'lat': row.get('lat'),
@@ -640,7 +583,7 @@ def run_impact_analysis(df_ips, weather_features, outage_features, earthquake_fe
             'risk_details': " | ".join(sorted(set(hazards))) if hazards else "None",
             'check_method': check_method
         })
-        
+
     return pd.DataFrame(results)
 
 def get_freshness_info(fetch_timestamp):
