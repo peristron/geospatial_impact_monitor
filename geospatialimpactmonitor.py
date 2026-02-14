@@ -278,47 +278,73 @@ def fetch_power_outages():
 
     return all_features
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_geolocation_bulk(ip_list):
-    """Batched IP Geolocation"""
+    """
+    Batched IP Geolocation with Caching.
+    Cached for 1 hour to prevent API rate limits on re-runs.
+    """
     url = "http://ip-api.com/batch"
     coords = []
+    # Remove duplicates and empty strings
     ip_list = list(filter(None, set(ip_list)))
 
+    # API limit is 15 requests per minute for batch endpoint
     chunk_size = 100
+    
     for i in range(0, len(ip_list), chunk_size):
         chunk = ip_list[i:i + chunk_size]
         try:
             response = requests.post(url, json=chunk, timeout=10).json()
-            for res in response:
-                if res.get('status') == 'success':
-                    coords.append({
-                        'ip': res['query'], 
-                        'lat': res['lat'], 
-                        'lon': res['lon'], 
-                        'city': res.get('city', 'N/A'), 
-                        'region': res.get('regionName', res.get('region', 'N/A')),
-                        'country': res.get('country', 'N/A'),
-                        'countryCode': res.get('countryCode', 'N/A'),
-                        'isp': res.get('isp', 'N/A'),
-                        'org': res.get('org', 'N/A')
-                    })
-                else:
-                    coords.append({
-                        'ip': res.get('query', 'Unknown'), 
-                        'lat': None, 
-                        'lon': None, 
-                        'city': "N/A", 
-                        'region': "N/A",
-                        'country': "N/A",
-                        'countryCode': "N/A",
-                        'isp': "N/A",
-                        'org': "N/A"
-                    })
-            time.sleep(0.5)
-        except:
-            pass
-    return pd.DataFrame(coords)
+            
+            # The API returns a list of dicts
+            if isinstance(response, list):
+                for res in response:
+                    if res.get('status') == 'success':
+                        coords.append({
+                            'ip': res['query'], 
+                            'lat': res['lat'], 
+                            'lon': res['lon'], 
+                            'city': res.get('city', 'N/A'), 
+                            'region': res.get('regionName', res.get('region', 'N/A')),
+                            'country': res.get('country', 'N/A'),
+                            'countryCode': res.get('countryCode', 'N/A'),
+                            'isp': res.get('isp', 'N/A'),
+                            'org': res.get('org', 'N/A')
+                        })
+                    else:
+                        # Log failed resolutions so we don't lose the row
+                        coords.append({
+                            'ip': res.get('query', 'Unknown'), 
+                            'lat': None, 
+                            'lon': None, 
+                            'city': "N/A", 
+                            'region': "N/A",
+                            'country': "N/A",
+                            'countryCode': "N/A",
+                            'isp': "N/A",
+                            'org': "N/A"
+                        })
+            
+            # Respect rate limits (approx 1 req/sec is safe)
+            time.sleep(1.0)
+            
+        except Exception as e:
+            # If a chunk fails, we log it as None to avoid crashing
+            for ip in chunk:
+                coords.append({
+                    'ip': ip, 
+                    'lat': None, 
+                    'lon': None, 
+                    'city': "Error", 
+                    'region': str(e),
+                    'country': "N/A",
+                    'countryCode': "N/A",
+                    'isp': "N/A",
+                    'org': "N/A"
+                })
 
+    return pd.DataFrame(coords)
 def parse_coordinates_input(raw_text):
     """
     Parse coordinate input in various formats:
