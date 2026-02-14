@@ -404,7 +404,7 @@ def parse_coordinates_input(raw_text):
 
 # --- ANALYSIS ---
 
-def run_impact_analysis(df_ips, weather_features, outage_features,
+def run_impact_analysis(df_ips, weather_features, outage_features, earthquake_features=None,
                         enable_point_fallback=True,
                         min_severity_rank=0,
                         exclude_low_priority=False):
@@ -416,6 +416,7 @@ def run_impact_analysis(df_ips, weather_features, outage_features,
     results = []
     weather_features = weather_features or []
     outage_features = outage_features or []
+    earthquake_features = earthquake_features or []
 
     # Track filter statistics
     filter_stats = {'total_alerts': 0, 'passed_filter': 0, 'filtered_out': 0}
@@ -507,6 +508,31 @@ def run_impact_analysis(df_ips, weather_features, outage_features,
             except:
                 continue
 
+    # --- Build Earthquake Zone List (New) ---
+    earthquake_polys = []
+    for feature in earthquake_features:
+        geom = feature.get('geometry')
+        props = feature.get('properties', {})
+        if geom and geom.get('coordinates'):
+            try:
+                # Geometry from USGS is a Point
+                quake_point = shape(geom)
+                # Create a "Impact Buffer" zone
+                # 0.5 degrees is roughly 35 miles / 55 km radius
+                # This approximates a "felt/impact" zone for moderate quakes
+                impact_zone = quake_point.buffer(0.5) 
+                
+                mag = props.get('mag', 0)
+                place = props.get('place', 'Unknown location')
+                time_str = datetime.fromtimestamp(props.get('time', 0)/1000).strftime('%Y-%m-%d %H:%M')
+                
+                earthquake_polys.append({
+                    'poly': impact_zone,
+                    'desc': f"Earthquake M{mag} near {place} ({time_str})"
+                })
+            except:
+                continue
+
     # --- Determine if we need point-based fallback ---
     # Use fallback if most features have null geometry
     use_point_fallback = (enable_point_fallback and 
@@ -522,6 +548,9 @@ def run_impact_analysis(df_ips, weather_features, outage_features,
     
     outage_geoms = [item['poly'] for item in outage_polys]
     outage_tree = STRtree(outage_geoms) if outage_geoms else None
+    
+    earthquake_geoms = [item['poly'] for item in earthquake_polys]
+    earthquake_tree = STRtree(earthquake_geoms) if earthquake_geoms else None
 
     # --- Analyze Each IP Location ---
     for index, row in df_ips.iterrows():
@@ -537,14 +566,12 @@ def run_impact_analysis(df_ips, weather_features, outage_features,
             # Method 1: Check against weather polygons (Optimized)
             if weather_tree:
                 # 1. Ask the tree for indices of polygons that might intersect our point
-                #    (This filters 500 active alerts down to usually 0, 1, or 2 candidates instantly)
                 candidate_indices = weather_tree.query(point)
                 
                 # 2. Check only the candidates
                 for idx in candidate_indices:
                     try:
                         alert = weather_polys[idx]
-                        # Exact check
                         if alert['poly'].contains(point) or alert['poly'].intersects(point_buffer):
                             is_at_risk = True
                             hazards.append(alert['desc'])
@@ -563,7 +590,19 @@ def run_impact_analysis(df_ips, weather_features, outage_features,
                     except:
                         continue
             
-            # Method 3: FALLBACK - Direct NWS point query when polygon data is insufficient
+            # Method 3: Check against Earthquake zones (New)
+            if earthquake_tree:
+                candidate_indices = earthquake_tree.query(point)
+                for idx in candidate_indices:
+                    try:
+                        quake = earthquake_polys[idx]
+                        if quake['poly'].contains(point):
+                            is_at_risk = True
+                            hazards.append(quake['desc'])
+                    except:
+                        continue
+
+            # Method 4: FALLBACK - Direct NWS point query when polygon data is insufficient
             if use_point_fallback and not is_at_risk:
                 point_alerts = check_point_alerts_nws(
                     row['lat'], row['lon'], 
@@ -589,7 +628,6 @@ def run_impact_analysis(df_ips, weather_features, outage_features,
         })
         
     return pd.DataFrame(results)
-
 # --- FRESHNESS HELPER ---
 
 def get_freshness_info(fetch_timestamp):
