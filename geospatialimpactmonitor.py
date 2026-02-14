@@ -1227,7 +1227,8 @@ with tab_mapper:
     # --- Sidebar for Global Mapper ---
     with st.sidebar:
         st.divider()
-        st.header("🗺️ Global Mapper, see the 'Global Location Mapper' tab")
+        st.header("🗺️ Global Mapper Controls")
+        st.caption("Settings for the **Global Location Mapper** tab")
         
         # Input type selection
         mapper_input_type = st.radio(
