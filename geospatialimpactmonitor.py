@@ -10,6 +10,7 @@ from datetime import datetime
 import plotly.express as px
 import plotly.graph_objects as go
 from shapely.strtree import STRtree
+import concurrent.futures
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Geospatial Impact Monitor", layout="wide")
