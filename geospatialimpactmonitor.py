@@ -478,7 +478,8 @@ def run_impact_analysis(df_ips, weather_features, outage_features, earthquake_fe
                         exclude_low_priority=False):
     """
     Performs spatial intersection analysis using STRtree.
-    Auto-detects Shapely version (2.0 returns indices, <2.0 returns geometries).
+    Auto-detects Shapely version.
+    OPTIMIZED: Uses Threading for NWS Point-API fallback and Geometry Simplification.
     """
     results = []
     weather_features = weather_features or []
@@ -486,7 +487,7 @@ def run_impact_analysis(df_ips, weather_features, outage_features, earthquake_fe
     earthquake_features = earthquake_features or []
     wildfire_features = wildfire_features or []
 
-    # --- Helper: Prepare Features ---
+    # --- Helper: Prepare Features with Simplification ---
     def prepare_polys(features, type_label):
         polys = []
         valid_count = 0
@@ -507,6 +508,11 @@ def run_impact_analysis(df_ips, weather_features, outage_features, earthquake_fe
                 if not poly.is_valid:
                     poly = make_valid(poly)
                 
+                # OPTIMIZATION: Simplify complex geometries (e.g. Wildfires) to speed up math
+                # 0.001 degrees is roughly 111 meters. Preserves shape but removes tiny vertices.
+                if len(str(geom)) > 1000: # Only simplify complex shapes
+                    poly = poly.simplify(0.001, preserve_topology=True)
+
                 # For Earthquakes, buffer the point to create a zone
                 if type_label == 'earthquake':
                     poly = poly.buffer(0.5) # ~35 miles
@@ -559,15 +565,20 @@ def run_impact_analysis(df_ips, weather_features, outage_features, earthquake_fe
     earthquake_tree = STRtree(e_geoms) if e_geoms else None
     wildfire_tree = STRtree(f_geoms) if f_geoms else None
 
-    # Determine Fallback
+    # Determine Fallback Necessity
+    # Trigger fallback if we have alerts but very few valid polygons
     use_point_fallback = (enable_point_fallback and w_count < len(weather_features) * 0.1 and len(weather_features) > 0)
     st.session_state.using_point_fallback = use_point_fallback
 
-    # --- Analyze IPs ---
+    # --- Analysis Phase 1: Polygon Checks (Fast) ---
+    
+    # We split results into "Done" and "Needs Fallback Check"
+    completed_results = []
+    fallback_queue = [] # List of (index, row) tuples
+
     for index, row in df_ips.iterrows():
         hazards = []
         is_at_risk = False
-        check_method = "polygon"
         
         if pd.notnull(row.get('lat')) and pd.notnull(row.get('lon')):
             point = Point(row['lon'], row['lat'])
@@ -606,31 +617,71 @@ def run_impact_analysis(df_ips, weather_features, outage_features, earthquake_fe
             if hazards:
                 is_at_risk = True
 
-            # Fallback
-            if use_point_fallback and not is_at_risk:
-                point_alerts = check_point_alerts_nws(
-                    row['lat'], row['lon'], 
-                    min_severity_rank=min_severity_rank,
-                    exclude_low_priority=exclude_low_priority
-                )
-                if point_alerts:
-                    is_at_risk = True
-                    hazards.extend(point_alerts)
-                    check_method = "point-api"
-                time.sleep(0.2)
+        # Decision: Done vs Fallback
+        if is_at_risk or not use_point_fallback:
+            # We are done with this IP
+            completed_results.append({
+                'original_index': index, # Keep track of order
+                'ip': row.get('ip'),
+                'lat': row.get('lat'),
+                'lon': row.get('lon'),
+                'city': row.get('city'),
+                'region': row.get('region'),
+                'is_at_risk': is_at_risk, 
+                'risk_details': " | ".join(sorted(set(hazards))) if hazards else "None",
+                'check_method': "polygon"
+            })
+        else:
+            # Needs NWS API check (Slow, so we queue it)
+            fallback_queue.append((index, row))
 
-        results.append({
-            'ip': row.get('ip'),
-            'lat': row.get('lat'),
-            'lon': row.get('lon'),
-            'city': row.get('city'),
-            'region': row.get('region'),
-            'is_at_risk': is_at_risk, 
-            'risk_details': " | ".join(sorted(set(hazards))) if hazards else "None",
-            'check_method': check_method
-        })
+    # --- Analysis Phase 2: Parallel Fallback Checks (Optimized) ---
+    
+    if fallback_queue:
+        def process_fallback(item):
+            idx, r = item
+            # Perform the slow API call
+            point_alerts = check_point_alerts_nws(
+                r['lat'], r['lon'], 
+                min_severity_rank=min_severity_rank,
+                exclude_low_priority=exclude_low_priority
+            )
+            
+            risk_found = False
+            details = "None"
+            method = "polygon" # failed polygon, but if API returns nothing, it remains polygon-cleared
+            
+            if point_alerts:
+                risk_found = True
+                details = " | ".join(sorted(set(point_alerts)))
+                method = "point-api"
+            
+            return {
+                'original_index': idx,
+                'ip': r.get('ip'),
+                'lat': r.get('lat'),
+                'lon': r.get('lon'),
+                'city': r.get('city'),
+                'region': r.get('region'),
+                'is_at_risk': risk_found, 
+                'risk_details': details,
+                'check_method': method
+            }
 
-    return pd.DataFrame(results)
+        # runs  concurrent requests (Max 10 threads to be polite to NWS API)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            fallback_results = list(executor.map(process_fallback, fallback_queue))
+            completed_results.extend(fallback_results)
+
+    # --- finalize ---
+    # re-sort to match original input order
+    df_results = pd.DataFrame(completed_results)
+    if not df_results.empty:
+        df_results = df_results.sort_values('original_index').reset_index(drop=True)
+        # drops the helper column
+        df_results = df_results.drop(columns=['original_index'])
+    
+    return df_results
 
 def get_freshness_info(fetch_timestamp):
     """
