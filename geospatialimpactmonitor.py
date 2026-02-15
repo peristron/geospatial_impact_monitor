@@ -1090,12 +1090,17 @@ with tab_impact:
             st.session_state.clear()
             st.rerun()
 
-        # --- NEW RESET BUTTON ---
-        st.divider()
-        if st.button("🗑️ Reset / Clear Cache", help="Clears all inputs, cached data, and results."):
-            st.cache_data.clear()
-            st.session_state.clear()
-            st.rerun()
+        # --- DATA SOURCES FOOTER ---
+        st.markdown("---")
+        st.caption(
+            "**Data Sources:**\n"
+            "• **Weather:** NOAA / NWS / IEM\n"
+            "• **Power:** HIFLD / ODIN\n"
+            "• **Seismic:** USGS Earthquake Hazards\n"
+            "• **Fire:** NIFC (WFIGS)\n"
+            "• **Geocoding:** IP-API / OpenStreetMap"
+        )
+
     # --- DISPLAY RESULTS ---
 
     if st.session_state.analysis_results is not None:
