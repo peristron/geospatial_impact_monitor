@@ -1140,28 +1140,103 @@ with tab_impact:
         if st.session_state.using_point_fallback:
             st.warning("⚠️ **Point-API Fallback Active**: Most weather alerts lack polygon geometry. Using direct NWS point queries.")
 
-        # --- Strategic Impact Assessment ---
-        st.subheader("🧠 Strategic Impact Assessment")
+        # --- Strategic Impact Assessment & Visual Analytics ---
+        st.subheader("📊 Strategic Impact & Risk Analytics")
         
+        # 1. Calculate Strategic Metrics
         weather_confinement_count = 0
         probable_offline_count = 0
+        
+        # 2. Calculate Hazard Breakdown for Charts
+        hazard_counts = {}
+        region_counts = {}
 
         for _, row in df_final.iterrows():
+            # Strategic Metrics Logic
             if row['is_at_risk']:
                 details = str(row.get('risk_details', ''))
+                
+                # Check specifics for Offline vs Load
                 if "Power Outage" in details or "Earthquake" in details:
                     probable_offline_count += 1
                 else:
                     weather_confinement_count += 1
+                
+                # Hazard Counting (Split by pipe if multiple hazards exist)
+                hazards = details.split(' | ')
+                for h in hazards:
+                    # Clean up the hazard name (remove severity info for grouping)
+                    # e.g. "Flood Warning (Severe)" -> "Flood Warning"
+                    base_name = h.split('(')[0].strip()
+                    if base_name in hazard_counts:
+                        hazard_counts[base_name] += 1
+                    else:
+                        hazard_counts[base_name] = 1
+                
+                # Regional Counting
+                region = row.get('region', 'Unknown')
+                if region in region_counts:
+                    region_counts[region] += 1
+                else:
+                    region_counts[region] = 1
 
+        # 3. Display Strategic Metrics Container
         with st.container(border=True):
             st.markdown("""
-            **Service Provider Context:** Severe weather typically increases online traffic, 
-            while power outages and earthquakes cause immediate traffic drops.
+            **Service Provider Context:** Severe weather typically increases online traffic (confinement), 
+            while power outages and earthquakes cause immediate traffic drops (offline).
             """)
             c1, c2 = st.columns(2)
-            c1.metric("📈 Potential Usage Spike (High Load)", f"{weather_confinement_count} Clients")
-            c2.metric("📉 Probable Traffic Drop (Offline)", f"{probable_offline_count} Clients")
+            c1.metric(
+                "📈 Potential Usage Spike (High Load)", 
+                f"{weather_confinement_count} Clients",
+                help="Clients in weather alert zones (Rain, Wind, Heat) likely remaining online."
+            )
+            c2.metric(
+                "📉 Probable Traffic Drop (Offline)", 
+                f"{probable_offline_count} Clients",
+                help="Clients in confirmed Power Outage or Earthquake zones likely offline."
+            )
+
+        # 4. Display Analytics Charts
+        if hazard_counts:
+            chart_col1, chart_col2 = st.columns(2)
+            
+            with chart_col1:
+                st.markdown("**Active Threat Breakdown**")
+                # Convert dict to DF for Plotly
+                df_hazards = pd.DataFrame(list(hazard_counts.items()), columns=['Hazard', 'Count'])
+                df_hazards = df_hazards.sort_values('Count', ascending=True)
+                
+                fig_haz = px.bar(
+                    df_hazards, 
+                    x='Count', 
+                    y='Hazard', 
+                    orientation='h',
+                    text='Count',
+                    color='Count',
+                    color_continuous_scale='Reds'
+                )
+                fig_haz.update_layout(showlegend=False, height=300, margin=dict(l=0, r=0, t=0, b=0))
+                st.plotly_chart(fig_haz, use_container_width=True)
+            
+            with chart_col2:
+                st.markdown("**Impact by Region**")
+                # Convert dict to DF
+                df_regions = pd.DataFrame(list(region_counts.items()), columns=['Region', 'Affected Clients'])
+                df_regions = df_regions.sort_values('Affected Clients', ascending=True).tail(10) # Top 10 only
+                
+                fig_reg = px.bar(
+                    df_regions,
+                    x='Affected Clients',
+                    y='Region',
+                    orientation='h',
+                    text='Affected Clients',
+                    color='Affected Clients',
+                    color_continuous_scale='Oranges'
+                )
+                fig_reg.update_layout(showlegend=False, height=300, margin=dict(l=0, r=0, t=0, b=0))
+                st.plotly_chart(fig_reg, use_container_width=True)
 
         # --- Map with Layer Controls ---
         st.subheader("Interactive Threat Map")
