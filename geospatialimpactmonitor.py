@@ -1388,7 +1388,7 @@ with tab_impact:
         if 'org' not in df_display.columns:
             df_display['org'] = 'N/A'
 
-        # 4. Select Columns
+        # 4. Select Columns (Now includes 'isp')
         cols_to_show = ['Status', 'ip', 'isp', 'city', 'region', 'risk_details', 'View']
         
         # 5. Configure the Table
