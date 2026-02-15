@@ -1290,16 +1290,20 @@ with tab_impact:
         df_display['Status'] = df_display['is_at_risk'].apply(lambda x: '🔴 AT RISK' if x else '🟢 Clear')
         
         # 2. Create Google Maps Link
-        # Format: https://www.google.com/maps/search/?api=1&query=lat,lon
         df_display['View'] = df_display.apply(
             lambda x: f"https://www.google.com/maps/search/?api=1&query={x['lat']},{x['lon']}", axis=1
         )
 
-        # 3. Select & Reorder Columns
-        # We now include ISP and Org for better network context
+        # 3. Crash-Proofing: Ensure columns exist (handles stale data or city inputs)
+        if 'isp' not in df_display.columns:
+            df_display['isp'] = 'N/A'
+        if 'org' not in df_display.columns:
+            df_display['org'] = 'N/A'
+
+        # 4. Select Columns
         cols_to_show = ['Status', 'ip', 'isp', 'city', 'region', 'risk_details', 'View']
         
-        # 4. Configure the Table
+        # 5. Configure the Table
         st.dataframe(
             df_display[cols_to_show],
             use_container_width=True,
@@ -1316,7 +1320,7 @@ with tab_impact:
                     display_text="Open Maps ↗️",
                     width="small"
                 ),
-                "ip": st.column_config.TextColumn("IP / Location"),
+                "ip": st.column_config.TextColumn("Location / IP"),
                 "isp": st.column_config.TextColumn("Network (ISP)"),
                 "risk_details": st.column_config.TextColumn(
                     "Hazard Details",
