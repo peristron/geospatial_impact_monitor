@@ -1108,7 +1108,9 @@ with tab_impact:
         fg_outages = folium.FeatureGroup(name="Power Outages", show=True)
         fg_weather = folium.FeatureGroup(name="Weather Alerts", show=True)
         fg_fires = folium.FeatureGroup(name="Wildfires", show=True)
-        fg_clients = folium.FeatureGroup(name="Clients (IPs)", show=True)
+        
+        # CHANGE: Use MarkerCluster for Clients to reduce clutter
+        fg_clients = MarkerCluster(name="Clients (IPs)", show=True, disableClusteringAtZoom=10)
 
         # Layer: Power Outages
         for feat in outage_features:
@@ -1149,7 +1151,7 @@ with tab_impact:
                 folium.GeoJson(feat, style_function=style, tooltip=tooltip).add_to(fg_weather)
             except: continue
                 
-        # Layer: IP Markers
+        # Layer: IP Markers (Added to Cluster)
         for _, row in df_final.iterrows():
             if pd.notnull(row.get('lat')):
                 is_risk = row.get('is_at_risk', False)
