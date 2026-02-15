@@ -908,7 +908,8 @@ with tab_impact:
                 "Paste Locations (City, State)", 
                 "Austin, TX\nSeattle, WA\nMiami, FL\nSan Francisco, CA\nNew York, NY", 
                 height=150,
-                key="impact_city_input"
+                key="impact_city_input",
+                help="⚠️ Rate Limit Note: Geocoding city names takes ~1.2 seconds per location to comply with OpenStreetMap's usage policy. Large lists will take longer to process than IP lists."
             )
             if raw_input: 
                 input_list = [x.strip() for x in raw_input.split('\n') if x.strip()]
