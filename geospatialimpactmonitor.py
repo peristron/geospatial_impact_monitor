@@ -97,6 +97,51 @@ def passes_severity_threshold(alert_props, min_severity_rank, exclude_low_priori
 
 # --- DATA FETCHING ---
 
+def geocode_bulk_nominatim(location_list):
+    """
+    Geocodes a list of place names using OpenStreetMap (Nominatim).
+    Requires a User-Agent (already compliant).
+    """
+    url = "https://nominatim.openstreetmap.org/search"
+    coords = []
+    
+    # Deduplicate
+    location_list = list(filter(None, set(location_list)))
+    
+    # Progress bar wrapper could go here, but we'll keep it simple
+    for loc in location_list:
+        try:
+            # Nominatim requires User-Agent
+            headers = {'User-Agent': 'Geospatial-Impact-Monitor'}
+            params = {'q': loc, 'format': 'json', 'limit': 1}
+            
+            r = requests.get(url, params=params, headers=headers, timeout=5)
+            if r.status_code == 200:
+                data = r.json()
+                if data:
+                    res = data[0]
+                    coords.append({
+                        'ip': loc, # Storing name in 'ip' column for compatibility with existing logic
+                        'label': loc,
+                        'lat': float(res['lat']), 
+                        'lon': float(res['lon']), 
+                        'city': loc, 
+                        'region': res.get('display_name', ''),
+                        'country': 'Geocoded'
+                    })
+                else:
+                    # Not found
+                    coords.append({'ip': loc, 'lat': None, 'lon': None, 'city': 'Not Found'})
+            
+            # RESPECT NOMINATIM POLICY: Max 1 request per second
+            time.sleep(1.1) 
+            
+        except Exception:
+            coords.append({'ip': loc, 'lat': None, 'lon': None, 'city': 'Error'})
+            
+    return pd.DataFrame(coords)
+
+
 def fetch_weather_data_hybrid():
     """
     Fetches weather from BOTH sources and merges results.
