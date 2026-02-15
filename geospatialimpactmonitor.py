@@ -620,17 +620,35 @@ def run_impact_analysis(df_ips, weather_features, outage_features, earthquake_fe
         # Decision: Done vs Fallback
         if is_at_risk or not use_point_fallback:
             # We are done with this IP
+            # ... inside the loop ...
             completed_results.append({
-                'original_index': index, # Keep track of order
+                'original_index': index,
                 'ip': row.get('ip'),
                 'lat': row.get('lat'),
                 'lon': row.get('lon'),
                 'city': row.get('city'),
                 'region': row.get('region'),
+                'isp': row.get('isp', 'N/A'),  # <--- NEW
+                'org': row.get('org', 'N/A'),  # <--- NEW
                 'is_at_risk': is_at_risk, 
                 'risk_details': " | ".join(sorted(set(hazards))) if hazards else "None",
                 'check_method': "polygon"
             })
+
+    # ... still inside process_fallback(item) ...
+            return {
+                'original_index': idx,
+                'ip': r.get('ip'),
+                'lat': r.get('lat'),
+                'lon': r.get('lon'),
+                'city': r.get('city'),
+                'region': r.get('region'),
+                'isp': r.get('isp', 'N/A'),  # <--- NEW
+                'org': r.get('org', 'N/A'),  # <--- NEW
+                'is_at_risk': risk_found, 
+                'risk_details': details,
+                'check_method': method
+            }
         else:
             # Needs NWS API check (Slow, so we queue it)
             fallback_queue.append((index, row))
