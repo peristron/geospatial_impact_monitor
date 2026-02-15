@@ -1007,8 +1007,8 @@ with tab_impact:
 
         if st.button("🔄 Run Spatial Analysis", type="primary", key="run_impact_analysis"):
             if input_list:
-                # clear cache for fresh data
-                st.cache_data.clear()
+                # OPTIMIZATION: Removed st.cache_data.clear() here.
+                # Use the new "Reset" button below to force a full clear.
                 
                 # Step 1: Resolve Locations (IPs or Cities)
                 with st.spinner("📍 Resolving locations..."):
@@ -1081,6 +1081,12 @@ with tab_impact:
             """
             components.html(js_switch_tab_1, height=0)
 
+        # --- NEW RESET BUTTON ---
+        st.divider()
+        if st.button("🗑️ Reset / Clear Cache", help="Clears all inputs, cached data, and results."):
+            st.cache_data.clear()
+            st.session_state.clear()
+            st.rerun()
     # --- DISPLAY RESULTS ---
 
     if st.session_state.analysis_results is not None:
