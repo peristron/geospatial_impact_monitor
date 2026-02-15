@@ -1285,11 +1285,45 @@ with tab_impact:
         st.subheader("Analysis Results")
         
         df_display = df_final.copy()
-        df_display['Status'] = df_display['is_at_risk'].apply(lambda x: '🔴 AT RISK' if x else '🟢 Clear')
-        display_cols = ['Status', 'ip', 'city', 'region', 'risk_details']
-        if 'check_method' in df_display.columns: display_cols.append('check_method')
         
-        st.dataframe(df_display[display_cols], use_container_width=True, hide_index=True)
+        # 1. Create Status Badge
+        df_display['Status'] = df_display['is_at_risk'].apply(lambda x: '🔴 AT RISK' if x else '🟢 Clear')
+        
+        # 2. Create Google Maps Link
+        # Format: https://www.google.com/maps/search/?api=1&query=lat,lon
+        df_display['View'] = df_display.apply(
+            lambda x: f"https://www.google.com/maps/search/?api=1&query={x['lat']},{x['lon']}", axis=1
+        )
+
+        # 3. Select & Reorder Columns
+        # We now include ISP and Org for better network context
+        cols_to_show = ['Status', 'ip', 'isp', 'city', 'region', 'risk_details', 'View']
+        
+        # 4. Configure the Table
+        st.dataframe(
+            df_display[cols_to_show],
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Status": st.column_config.TextColumn(
+                    "Risk Status",
+                    help="Red = Active Alert Zone",
+                    width="small"
+                ),
+                "View": st.column_config.LinkColumn(
+                    "Map Context",
+                    help="Open location in Google Maps",
+                    display_text="Open Maps ↗️",
+                    width="small"
+                ),
+                "ip": st.column_config.TextColumn("IP / Location"),
+                "isp": st.column_config.TextColumn("Network (ISP)"),
+                "risk_details": st.column_config.TextColumn(
+                    "Hazard Details",
+                    width="large"
+                )
+            }
+        )
 
         # CSV Download Button
         csv = df_final.to_csv(index=False)
