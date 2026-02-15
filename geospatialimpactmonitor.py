@@ -1083,6 +1083,15 @@ with tab_impact:
 
         # --- NEW RESET BUTTON ---
         st.divider()
+        # type="primary" makes it colored (Red)
+        # use_container_width=True makes it full width
+        if st.button("🗑️ Reset / Clear Cache", type="primary", use_container_width=True, help="⚠️ WARNING: Clears all inputs, cached data, and results."):
+            st.cache_data.clear()
+            st.session_state.clear()
+            st.rerun()
+
+        # --- NEW RESET BUTTON ---
+        st.divider()
         if st.button("🗑️ Reset / Clear Cache", help="Clears all inputs, cached data, and results."):
             st.cache_data.clear()
             st.session_state.clear()
