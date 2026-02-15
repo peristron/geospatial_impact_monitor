@@ -833,8 +833,12 @@ with tab_impact:
         st.header("🌩️ Impact Monitor Controls")
         st.caption("Settings for the **Impact Monitor** tab")
         st.subheader("Data Input")
-        input_method = st.radio("Method", ["Paste IP List", "Bulk Upload"], key="impact_input_method")
-        ip_list = []
+        input_method = st.radio(
+            "Method", 
+            ["Paste IP List", "Paste City/Place Names", "Bulk Upload"], 
+            key="impact_input_method"
+        )
+        input_list = []
 
         if input_method == "Paste IP List":
             # Default IPs: higher-ed and/or k12 educational institutions using D2L Brightspace in the US South/Southeast
@@ -845,7 +849,18 @@ with tab_impact:
                 key="impact_ip_input"
             )
             if raw_input: 
-                ip_list = [ip.strip() for ip in raw_input.replace(',', '\n').split('\n') if ip.strip()]
+                input_list = [ip.strip() for ip in raw_input.replace(',', '\n').split('\n') if ip.strip()]
+        
+        elif input_method == "Paste City/Place Names":
+            raw_input = st.text_area(
+                "Paste Locations (City, State)", 
+                "Austin, TX\nSeattle, WA\nMiami, FL\nSan Francisco, CA\nNew York, NY", 
+                height=150,
+                key="impact_city_input"
+            )
+            if raw_input: 
+                input_list = [x.strip() for x in raw_input.split('\n') if x.strip()]
+
         else:
             uploaded_file = st.file_uploader("Upload CSV/XLSX", type=['csv', 'xlsx'], key="impact_file_upload")
             if uploaded_file:
@@ -854,16 +869,26 @@ with tab_impact:
                         df = pd.read_csv(uploaded_file)
                     else: 
                         df = pd.read_excel(uploaded_file)
-                    # Find IP column
-                    ip_col = None
+                    
+                    # Try to find IP column, then City column, then first column
+                    target_col = None
                     for col in df.columns:
                         if 'ip' in col.lower():
-                            ip_col = col
+                            target_col = col
                             break
-                    if ip_col is None:
-                        ip_col = df.columns[0]
-                    ip_list = df[ip_col].astype(str).tolist()
-                    st.success(f"Loaded {len(ip_list)} IPs from '{ip_col}'")
+                    
+                    # If no IP column found, look for City/Location
+                    if not target_col:
+                        for col in df.columns:
+                            if 'city' in col.lower() or 'location' in col.lower():
+                                target_col = col
+                                break
+                    
+                    if not target_col:
+                        target_col = df.columns[0]
+                    
+                    input_list = df[target_col].astype(str).tolist()
+                    st.success(f"Loaded {len(input_list)} items from '{target_col}'")
                 except Exception as e: 
                     st.error(f"File error: {e}")
 
