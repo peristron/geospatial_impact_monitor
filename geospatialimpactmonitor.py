@@ -950,12 +950,25 @@ with tab_impact:
             rerun_analysis_with_filters()
 
         if st.button("🔄 Run Spatial Analysis", type="primary", key="run_impact_analysis"):
-            if ip_list:
+            if input_list:
                 # clear cache for fresh data
                 st.cache_data.clear()
                 
-                with st.spinner("📍 Geolocating IPs..."):
-                    df_geo = get_geolocation_bulk(ip_list)
+                # Step 1: Resolve Locations (IPs or Cities)
+                with st.spinner("📍 Resolving locations..."):
+                    if input_method == "Paste City/Place Names":
+                        # Use Nominatim for cities
+                        df_geo = geocode_bulk_nominatim(input_list)
+                    else:
+                        # Use IP-API for IPs (or file upload assumed IPs/mixed)
+                        # Basic heuristic: if it looks like an IP, use IP geolocator
+                        sample = input_list[0] if input_list else ""
+                        # If simple check fails (has letters and no dot), assume city name
+                        if any(c.isalpha() for c in sample) and "." not in sample: 
+                             df_geo = geocode_bulk_nominatim(input_list)
+                        else:
+                             df_geo = get_geolocation_bulk(input_list)
+                    
                     st.session_state.geo_data = df_geo
                 
                 with st.spinner("🔥 Fetching Weather, Power, Quakes & Wildfires..."):
