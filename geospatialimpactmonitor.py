@@ -1080,8 +1080,21 @@ with tab_impact:
                 st.session_state.wildfire_data = wildfire_features
                 
                 st.success("Analysis complete!")
+            
             else:
                 st.warning("Please input at least one IP address.")
+
+            # --- AUTO-SWITCH TO TAB 1 (JavaScript) ---
+            # This script simulates a click on the FIRST tab (Index 0)
+            js_switch_tab_1 = """
+            <script>
+                var tabs = window.parent.document.querySelectorAll('button[data-baseweb="tab"]');
+                if (tabs.length > 0) {
+                    tabs[0].click();
+                }
+            </script>
+            """
+            components.html(js_switch_tab_1, height=0)
 
     # --- DISPLAY RESULTS ---
 
