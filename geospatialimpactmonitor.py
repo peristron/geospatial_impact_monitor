@@ -779,7 +779,8 @@ def get_freshness_info(fetch_timestamp):
 
 def create_global_map(df_locations, projection='natural earth', 
                       marker_size=10, marker_color='#FF6B6B',
-                      show_labels=True, globe_rotation=None):
+                      show_labels=True, globe_rotation=None,
+                      enable_weighted_markers=True):
     """
     Create a Plotly map with the specified projection.
     Returns a Plotly figure object.
@@ -827,7 +828,7 @@ def create_global_map(df_locations, projection='natural earth',
     fig = go.Figure()
     
     marker_sizes = marker_size
-    if 'input_count' in df_locations.columns:
+    if enable_weighted_markers and 'input_count' in df_locations.columns:
         marker_sizes = [weighted_marker_radius(value, base_radius=marker_size, max_radius=40) for value in df_locations['input_count']]
 
     fig.add_trace(go.Scattergeo(
@@ -918,6 +919,8 @@ if 'global_mapper_data' not in st.session_state:
     st.session_state.global_mapper_data = None
 if 'global_mapper_projection' not in st.session_state:
     st.session_state.global_mapper_projection = 'natural earth'
+if 'enable_global_weighted_markers' not in st.session_state:
+    st.session_state.enable_global_weighted_markers = True
 
 # --- UI ---
 
@@ -1728,6 +1731,14 @@ with tab_mapper:
         marker_size = st.slider("Marker Size", 5, 25, 12, key="marker_size")
         marker_color = st.color_picker("Marker Color", "#FF6B6B", key="marker_color")
         show_labels = st.checkbox("Show Labels", value=True, key="show_labels")
+        enable_global_weighted_markers = st.checkbox(
+            "Weight repeated IPs on map",
+            value=st.session_state.enable_global_weighted_markers,
+            key="global_weighted_markers_checkbox",
+            help="Collapse duplicate IPs/locations for geocoding, then draw repeated entries as larger map markers in the Global Mapper."
+        )
+        if enable_global_weighted_markers != st.session_state.enable_global_weighted_markers:
+            st.session_state.enable_global_weighted_markers = enable_global_weighted_markers
         
         # Map button
         if st.button("🗺️ Generate Map", type="primary", key="generate_map"):
@@ -1811,16 +1822,21 @@ with tab_mapper:
         current_proj = st.session_state.global_mapper_projection
         
         # Metrics
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total Locations", len(df_map))
+        col1, col2, col3, col4 = st.columns(4)
+        if 'input_count' in df_map.columns:
+            col1.metric("Input Occurrences", int(df_map['input_count'].sum()), help="Total pasted/uploaded rows represented by the mapped unique locations.")
+            col2.metric("Unique Locations", len(df_map))
+        else:
+            col1.metric("Total Locations", len(df_map))
+            col2.metric("Unique Locations", len(df_map))
         
         country_col = 'country' if 'country' in df_map.columns else 'countryCode'
         if country_col in df_map.columns:
-            col2.metric("Countries", df_map[country_col].nunique())
+            col3.metric("Countries", df_map[country_col].nunique())
         
         # Display the projection name based on the value in session state
         proj_name = next((k for k, v in PROJECTION_OPTIONS.items() if v == current_proj), "Unknown")
-        col3.metric("Projection", proj_name)
+        col4.metric("Projection", proj_name)
         
         # Create and display the map
         fig = create_global_map(
@@ -1829,7 +1845,8 @@ with tab_mapper:
             marker_size=marker_size,
             marker_color=marker_color,
             show_labels=show_labels,
-            globe_rotation=globe_rotation
+            globe_rotation=globe_rotation,
+            enable_weighted_markers=st.session_state.enable_global_weighted_markers
         )
         
         st.plotly_chart(fig, use_container_width=True)
