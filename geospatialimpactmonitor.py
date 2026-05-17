@@ -7,6 +7,7 @@ from streamlit_folium import st_folium
 from shapely.geometry import shape, Point
 from shapely.validation import make_valid
 import time
+import math
 from datetime import datetime
 import plotly.express as px
 import plotly.graph_objects as go
@@ -75,6 +76,63 @@ LOW_PRIORITY_EVENTS = [
     'Hazardous Weather Outlook'
 ]
 
+def dedupe_preserve_order(values):
+    """Remove blanks and duplicates while preserving first-seen order."""
+    seen = set()
+    ordered_values = []
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        ordered_values.append(text)
+    return ordered_values
+
+
+def attach_input_weights(df_locations, raw_inputs, key_col='ip'):
+    """Attach occurrence counts from the original input list to geocoded rows.
+
+    This keeps external API calls efficient by resolving each unique IP/place once,
+    while preserving the operational signal that repeated IPs/locations represent
+    greater concentration in the uploaded or pasted list.
+    """
+    if df_locations is None or df_locations.empty:
+        return df_locations
+
+    cleaned_inputs = [str(value).strip() for value in raw_inputs if value is not None and str(value).strip()]
+    counts = pd.Series(cleaned_inputs).value_counts() if cleaned_inputs else pd.Series(dtype='int64')
+
+    df_weighted = df_locations.copy()
+    if key_col in df_weighted.columns:
+        df_weighted['input_count'] = df_weighted[key_col].astype(str).map(counts).fillna(1).astype(int)
+    else:
+        df_weighted['input_count'] = 1
+
+    # Alias used by map/chart logic. Kept separate so future weighting schemes can differ.
+    df_weighted['weight'] = df_weighted['input_count']
+    return df_weighted
+
+
+def weighted_marker_radius(weight, base_radius=6, max_radius=30):
+    """Scale marker radius gently so repeated IPs stand out without overwhelming the map."""
+    try:
+        weight = max(int(weight), 1)
+    except (TypeError, ValueError):
+        weight = 1
+    return min(base_radius + (math.sqrt(weight) * 3), max_radius)
+
+
+def weighted_marker_opacity(weight, base_opacity=0.45, max_opacity=0.95):
+    """Increase fill opacity for repeated IPs/locations."""
+    try:
+        weight = max(int(weight), 1)
+    except (TypeError, ValueError):
+        weight = 1
+    return min(base_opacity + (math.log1p(weight) * 0.12), max_opacity)
+
+
 def get_severity_rank(severity_str):
     """Convert severity string to numeric rank for comparison."""
     if not severity_str:
@@ -106,8 +164,8 @@ def geocode_bulk_nominatim(location_list):
     url = "https://nominatim.openstreetmap.org/search"
     coords = []
     
-    # Deduplicate
-    location_list = list(filter(None, set(location_list)))
+    # Deduplicate while preserving first-seen order
+    location_list = dedupe_preserve_order(location_list)
     
     # Progress bar wrapper could go here, but we'll keep it simple
     for loc in location_list:
@@ -369,8 +427,8 @@ def get_geolocation_bulk(ip_list):
     """
     url = "http://ip-api.com/batch"
     coords = []
-    # Remove duplicates and empty strings
-    ip_list = list(filter(None, set(ip_list)))
+    # Remove duplicates and empty strings while preserving first-seen order
+    ip_list = dedupe_preserve_order(ip_list)
 
     # API limit is 15 requests per minute for batch endpoint
     chunk_size = 100
@@ -628,6 +686,8 @@ def run_impact_analysis(df_ips, weather_features, outage_features, earthquake_fe
                 'region': row.get('region'),
                 'isp': row.get('isp', 'N/A'), # <--- FIXED: Now correctly grabbing ISP
                 'org': row.get('org', 'N/A'), # <--- FIXED: Now correctly grabbing Org
+                'input_count': int(row.get('input_count', 1) or 1),
+                'weight': int(row.get('weight', row.get('input_count', 1)) or 1),
                 'is_at_risk': is_at_risk, 
                 'risk_details': " | ".join(sorted(set(hazards))) if hazards else "None",
                 'check_method': "polygon"
@@ -666,6 +726,8 @@ def run_impact_analysis(df_ips, weather_features, outage_features, earthquake_fe
                 'region': r.get('region'),
                 'isp': r.get('isp', 'N/A'), # <--- FIXED: Now correctly grabbing ISP in threads
                 'org': r.get('org', 'N/A'), # <--- FIXED: Now correctly grabbing Org in threads
+                'input_count': int(r.get('input_count', 1) or 1),
+                'weight': int(r.get('weight', r.get('input_count', 1)) or 1),
                 'is_at_risk': risk_found, 
                 'risk_details': details,
                 'check_method': method
@@ -757,17 +819,23 @@ def create_global_map(df_locations, projection='natural earth',
         parts.append(f"Lon: {row['lon']:.4f}")
         if 'isp' in row and row.get('isp') != 'N/A':
             parts.append(f"ISP: {row['isp']}")
+        if 'input_count' in row and pd.notnull(row.get('input_count')):
+            parts.append(f"Occurrences: {int(row.get('input_count', 1))}")
         hover_texts.append("<br>".join(parts))
     
     # Create the scatter geo plot
     fig = go.Figure()
     
+    marker_sizes = marker_size
+    if 'input_count' in df_locations.columns:
+        marker_sizes = [weighted_marker_radius(value, base_radius=marker_size, max_radius=40) for value in df_locations['input_count']]
+
     fig.add_trace(go.Scattergeo(
         lon=df_locations['lon'],
         lat=df_locations['lat'],
         mode='markers+text' if show_labels else 'markers',
         marker=dict(
-            size=marker_size,
+            size=marker_sizes,
             color=marker_color,
             opacity=0.8,
             line=dict(width=1, color='white')
@@ -834,6 +902,8 @@ if 'geo_data' not in st.session_state:
     st.session_state.geo_data = None
 if 'enable_fallback' not in st.session_state:
     st.session_state.enable_fallback = True
+if 'enable_weighted_markers' not in st.session_state:
+    st.session_state.enable_weighted_markers = True
 if 'min_severity_rank' not in st.session_state:
     st.session_state.min_severity_rank = 2 # Default to Moderate+
 if 'exclude_low_priority' not in st.session_state:
@@ -1005,6 +1075,15 @@ with tab_impact:
             st.session_state.enable_fallback = enable_fallback
             rerun_analysis_with_filters()
 
+        enable_weighted_markers = st.checkbox(
+            "Weight repeated IPs on map",
+            value=st.session_state.enable_weighted_markers,
+            key="weighted_markers_checkbox",
+            help="Collapse duplicate IPs/locations for analysis, then draw repeated entries as larger/darker map markers."
+        )
+        if enable_weighted_markers != st.session_state.enable_weighted_markers:
+            st.session_state.enable_weighted_markers = enable_weighted_markers
+
         if st.button("🔄 Run Spatial Analysis", type="primary", key="run_impact_analysis"):
             if input_list:
                 # OPTIMIZATION: Removed st.cache_data.clear() here.
@@ -1014,16 +1093,16 @@ with tab_impact:
                 with st.spinner("📍 Resolving locations..."):
                     if input_method == "Paste City/Place Names":
                         # Use Nominatim for cities
-                        df_geo = geocode_bulk_nominatim(input_list)
+                        df_geo = attach_input_weights(geocode_bulk_nominatim(dedupe_preserve_order(input_list)), input_list)
                     else:
                         # Use IP-API for IPs (or file upload assumed IPs/mixed)
                         # Basic heuristic: if it looks like an IP, use IP geolocator
                         sample = input_list[0] if input_list else ""
                         # If simple check fails (has letters and no dot), assume city name
                         if any(c.isalpha() for c in sample) and "." not in sample: 
-                             df_geo = geocode_bulk_nominatim(input_list)
+                             df_geo = attach_input_weights(geocode_bulk_nominatim(dedupe_preserve_order(input_list)), input_list)
                         else:
-                             df_geo = get_geolocation_bulk(input_list)
+                             df_geo = attach_input_weights(get_geolocation_bulk(dedupe_preserve_order(input_list)), input_list)
                     
                     st.session_state.geo_data = df_geo
                 
@@ -1111,34 +1190,45 @@ with tab_impact:
         geom_stats = st.session_state.geom_stats
 
         # --- Metrics Row ---
-        col1, col2, col3, col4, col5 = st.columns(5)
-        col1.metric("Total Clients", len(df_final))
+        if 'input_count' not in df_final.columns:
+            df_final['input_count'] = 1
+        if 'weight' not in df_final.columns:
+            df_final['weight'] = df_final['input_count']
 
-        at_risk_count = len(df_final[df_final['is_at_risk'] == True])
-        col2.metric("Clients at Risk", at_risk_count, 
-                    delta=f"{at_risk_count}" if at_risk_count > 0 else None,
+        total_occurrences = int(df_final['input_count'].sum())
+        unique_locations = len(df_final)
+        at_risk_df = df_final[df_final['is_at_risk'] == True]
+        at_risk_occurrences = int(at_risk_df['input_count'].sum()) if not at_risk_df.empty else 0
+
+        col1, col2, col3, col4, col5, col6 = st.columns(6)
+        col1.metric("Input Occurrences", total_occurrences)
+        col2.metric("Unique Locations", unique_locations)
+        col3.metric("At-Risk Occurrences", at_risk_occurrences,
+                    delta=f"{at_risk_occurrences}" if at_risk_occurrences > 0 else None,
                     delta_color="inverse")
-
-        col3.metric("Weather Source", st.session_state.weather_source)
+        col4.metric("Weather Source", st.session_state.weather_source)
 
         valid_polys = geom_stats.get('valid_polygons', 0)
         total_feats = geom_stats.get('total_features', 0)
-        col4.metric("Valid Polygons", f"{valid_polys}/{total_feats}")
+        col5.metric("Valid Polygons", f"{valid_polys}/{total_feats}")
 
         age_str, freshness_icon, is_stale = get_freshness_info(st.session_state.fetch_timestamp)
-        col5.metric(f"{freshness_icon} Data Freshness", age_str)
+        col6.metric(f"{freshness_icon} Data Freshness", age_str)
 
         st.caption(
-            "**Metrics:** Clients at Risk = IPs in active alert/outage zones · "
-            "Valid Polygons = mappable alert boundaries (0 is OK if Point-API fallback is enabled)"
+            "**Metrics:** Input Occurrences = raw pasted/uploaded rows after blanks are removed · "
+            "Unique Locations = deduplicated geocoded IPs/places · "
+            "At-Risk Occurrences = repeated-input weighted count of locations in active risk zones · "
+            "Valid Polygons = mappable alert boundaries."
         )
 
         with st.expander("ℹ️ What do these metrics mean?"):
             st.markdown("""
 | Metric | Description |
 | :--- | :--- |
-| **Total Clients** | Count of unique IP addresses that were successfully geolocated. |
-| **Clients at Risk** | Locations that fall within an active weather alert, outage, quake, or wildfire zone. |
+| **Input Occurrences** | Count of pasted/uploaded IPs or locations after blank rows are removed, including duplicates. |
+| **Unique Locations** | Deduplicated IPs or places that were successfully geolocated and analyzed. |
+| **At-Risk Occurrences** | Weighted count of repeated input rows whose unique IP/place is in an active risk zone. |
 | **Weather Source** | Where alert data was fetched from. |
 | **Valid Polygons** | How many alerts have geographic boundaries that can be mapped. |
 | **Data Freshness** | Time since alert data was fetched. |
@@ -1175,10 +1265,12 @@ with tab_impact:
                 details = str(row.get('risk_details', ''))
                 
                 # Check specifics for Offline vs Load
+                row_weight = int(row.get('input_count', 1) or 1)
+
                 if "Power Outage" in details or "Earthquake" in details:
-                    probable_offline_count += 1
+                    probable_offline_count += row_weight
                 else:
-                    weather_confinement_count += 1
+                    weather_confinement_count += row_weight
                 
                 # Hazard Counting (Split by pipe if multiple hazards exist)
                 hazards = details.split(' | ')
@@ -1187,16 +1279,16 @@ with tab_impact:
                     # e.g. "Flood Warning (Severe)" -> "Flood Warning"
                     base_name = h.split('(')[0].strip()
                     if base_name in hazard_counts:
-                        hazard_counts[base_name] += 1
+                        hazard_counts[base_name] += row_weight
                     else:
-                        hazard_counts[base_name] = 1
+                        hazard_counts[base_name] = row_weight
                 
                 # Regional Counting
                 region = row.get('region', 'Unknown')
                 if region in region_counts:
-                    region_counts[region] += 1
+                    region_counts[region] += row_weight
                 else:
-                    region_counts[region] = 1
+                    region_counts[region] = row_weight
 
         # 3. Display Strategic Metrics Container
         with st.container(border=True):
@@ -1207,13 +1299,13 @@ with tab_impact:
             c1, c2 = st.columns(2)
             c1.metric(
                 "📈 Potential Usage Spike (High Load)", 
-                f"{weather_confinement_count} Clients",
-                help="Clients in weather alert zones (Rain, Wind, Heat) likely remaining online."
+                f"{weather_confinement_count} Occurrences",
+                help="Weighted occurrences in weather alert zones (Rain, Wind, Heat) likely remaining online."
             )
             c2.metric(
                 "📉 Probable Traffic Drop (Offline)", 
-                f"{probable_offline_count} Clients",
-                help="Clients in confirmed Power Outage or Earthquake zones likely offline."
+                f"{probable_offline_count} Occurrences",
+                help="Weighted occurrences in confirmed Power Outage or Earthquake zones likely offline."
             )
 
         # 4. Display Analytics Charts
@@ -1241,15 +1333,15 @@ with tab_impact:
             with chart_col2:
                 st.markdown("**Impact by Region**")
                 # Convert dict to DF
-                df_regions = pd.DataFrame(list(region_counts.items()), columns=['Region', 'Affected Clients'])
+                df_regions = pd.DataFrame(list(region_counts.items()), columns=['Region', 'Affected Occurrences'])
                 df_regions = df_regions.sort_values('Affected Clients', ascending=True).tail(10) # Top 10 only
                 
                 fig_reg = px.bar(
                     df_regions,
-                    x='Affected Clients',
+                    x='Affected Occurrences',
                     y='Region',
                     orientation='h',
-                    text='Affected Clients',
+                    text='Affected Occurrences',
                     color='Affected Clients',
                     color_continuous_scale='Oranges'
                 )
@@ -1319,11 +1411,12 @@ with tab_impact:
             if pd.notnull(row.get('lat')):
                 is_risk = row.get('is_at_risk', False)
                 details = str(row.get('risk_details', '')).lower()
-                
+                input_count = int(row.get('input_count', row.get('weight', 1)) or 1)
+
                 # Default Safe State
                 color = 'green'
                 icon = 'check'
-                
+
                 # Dynamic Hazard Icons (Priority Order)
                 if is_risk:
                     if 'wildfire' in details:
@@ -1334,34 +1427,52 @@ with tab_impact:
                         icon = 'plug'
                     elif 'earthquake' in details:
                         color = 'orange'
-                        icon = 'house-crack' # or 'activity'
+                        icon = 'warning'
                     elif 'tornado' in details:
                         color = 'red'
-                        icon = 'wind' 
+                        icon = 'warning'
                     elif 'thunderstorm' in details or 'storm' in details:
                         color = 'red'
-                        icon = 'cloud-bolt'
+                        icon = 'flash'
                     elif 'flood' in details:
                         color = 'blue'
-                        icon = 'water'
+                        icon = 'tint'
                     elif 'winter' in details or 'snow' in details or 'ice' in details:
                         color = 'blue'
-                        icon = 'snowflake'
+                        icon = 'asterisk'
                     elif 'heat' in details:
                         color = 'orange'
-                        icon = 'temperature-high'
+                        icon = 'warning'
                     else:
-                        # Generic Warning
                         color = 'red'
-                        icon = 'triangle-exclamation'
+                        icon = 'warning'
 
-                popup_html = f"<b>IP:</b> {row.get('ip')}<br><b>Status:</b> {'⚠️ AT RISK' if is_risk else '✅ Clear'}<br><b>Details:</b> {row.get('risk_details')}"
-                
-                folium.Marker(
-                    [row['lat'], row['lon']], 
-                    popup=folium.Popup(popup_html, max_width=300),
-                    icon=folium.Icon(color=color, icon=icon, prefix='fa')
-                ).add_to(fg_clients)
+                popup_html = (
+                    f"<b>IP / Location:</b> {row.get('ip')}<br>"
+                    f"<b>Occurrences in input:</b> {input_count}<br>"
+                    f"<b>Status:</b> {'⚠️ AT RISK' if is_risk else '✅ Clear'}<br>"
+                    f"<b>Details:</b> {row.get('risk_details')}"
+                )
+
+                if st.session_state.enable_weighted_markers:
+                    # CircleMarker allows visually meaningful weight via radius + opacity.
+                    folium.CircleMarker(
+                        location=[row['lat'], row['lon']],
+                        radius=weighted_marker_radius(input_count),
+                        color=color,
+                        fill=True,
+                        fill_color=color,
+                        fill_opacity=weighted_marker_opacity(input_count),
+                        weight=2 if is_risk else 1,
+                        popup=folium.Popup(popup_html, max_width=320),
+                        tooltip=f"{row.get('ip')} · {input_count} occurrence{'s' if input_count != 1 else ''}"
+                    ).add_to(fg_clients)
+                else:
+                    folium.Marker(
+                        [row['lat'], row['lon']],
+                        popup=folium.Popup(popup_html, max_width=320),
+                        icon=folium.Icon(color=color, icon=icon, prefix='fa')
+                    ).add_to(fg_clients)
 
         # Add all layers to map
         fg_outages.add_to(m)
@@ -1392,9 +1503,11 @@ with tab_impact:
             df_display['isp'] = 'N/A'
         if 'org' not in df_display.columns:
             df_display['org'] = 'N/A'
+        if 'input_count' not in df_display.columns:
+            df_display['input_count'] = 1
 
-        # 4. Select Columns (Now includes 'isp')
-        cols_to_show = ['Status', 'ip', 'isp', 'city', 'region', 'risk_details', 'View']
+        # 4. Select Columns (Now includes occurrence weight)
+        cols_to_show = ['Status', 'ip', 'input_count', 'isp', 'city', 'region', 'risk_details', 'View']
         
         # 5. Configure the Table
         st.dataframe(
@@ -1414,6 +1527,7 @@ with tab_impact:
                     width="small"
                 ),
                 "ip": st.column_config.TextColumn("Location / IP"),
+                "input_count": st.column_config.NumberColumn("Occurrences", help="Number of times this IP/location appeared in the original input."),
                 "isp": st.column_config.TextColumn("Network (ISP)"),
                 "risk_details": st.column_config.TextColumn(
                     "Hazard Details",
@@ -1433,7 +1547,9 @@ with tab_impact:
         
         at_risk_df = df_final[df_final['is_at_risk'] == True]
         if not at_risk_df.empty:
-            st.caption(f"⚠️ {len(at_risk_df)} of {len(df_final)} locations have active risks.")
+            weighted_at_risk = int(at_risk_df['input_count'].sum()) if 'input_count' in at_risk_df.columns else len(at_risk_df)
+            weighted_total = int(df_final['input_count'].sum()) if 'input_count' in df_final.columns else len(df_final)
+            st.caption(f"⚠️ {len(at_risk_df)} unique locations are at risk, representing {weighted_at_risk} of {weighted_total} input occurrences.")
 
         # --- Debug Expander ---
         with st.expander("🔧 Debug Information"):
@@ -1620,8 +1736,8 @@ with tab_mapper:
                     ip_list = [ip.strip() for ip in mapper_ip_input.split('\n') if ip.strip()]
                     if ip_list:
                         # Use cached function and copy result to avoid mutation warnings
-                        raw_data = get_geolocation_bulk(ip_list)
-                        mapper_locations = raw_data.copy() if not raw_data.empty else raw_data
+                        raw_data = get_geolocation_bulk(dedupe_preserve_order(ip_list))
+                        mapper_locations = attach_input_weights(raw_data, ip_list) if not raw_data.empty else raw_data
                         
                         if not mapper_locations.empty:
                             mapper_locations['label'] = mapper_locations.apply(
@@ -1656,8 +1772,8 @@ with tab_mapper:
                                         mapper_locations['label'] = [f"Point {i+1}" for i in range(len(mapper_locations))]
                             elif ip_col:
                                 ip_list = df[ip_col].astype(str).tolist()
-                                raw_data = get_geolocation_bulk(ip_list)
-                                mapper_locations = raw_data.copy() if not raw_data.empty else raw_data
+                                raw_data = get_geolocation_bulk(dedupe_preserve_order(ip_list))
+                                mapper_locations = attach_input_weights(raw_data, ip_list) if not raw_data.empty else raw_data
                                 if not mapper_locations.empty:
                                     mapper_locations['label'] = mapper_locations.apply(
                                         lambda r: f"{r['city']}, {r['countryCode']}" if r['city'] != 'N/A' else r['ip'],
@@ -1720,7 +1836,7 @@ with tab_mapper:
         
         # Data table
         st.subheader("📍 Location Data")
-        display_cols = [c for c in ['label', 'ip', 'lat', 'lon', 'city', 'region', 'country', 'countryCode', 'isp'] if c in df_map.columns]
+        display_cols = [c for c in ['label', 'ip', 'input_count', 'lat', 'lon', 'city', 'region', 'country', 'countryCode', 'isp'] if c in df_map.columns]
         st.dataframe(df_map[display_cols], use_container_width=True, hide_index=True)
         
         # Export
